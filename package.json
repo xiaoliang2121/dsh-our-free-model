@@ -98,6 +98,7 @@
     "src/providers",
     "src/route",
     "src/o2a.js",
+    "src/opencode-credential.js",
     "vendor/channel-pack/pack.js",
     "vendor/channel-pack/qoder-auth-wasm.wasm",
     "vendor/channel-pack/NOTICE.md",

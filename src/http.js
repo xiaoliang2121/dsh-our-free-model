@@ -24,6 +24,7 @@
 
 import { CLIENT_UA, UPSTREAM_BASE, gatewayHeaders, truncateSession } from './upstream.js'
 import { egressFetch } from './egress.js'
+import { resolveOpencodeCredential } from './opencode-credential.js'
 
 /** Harness-neutral failure codes (packages/llm/llm/src/error.ts vocabulary; CLIENT_ERROR extends it like CONFIG_DISABLED does). */
 export const CODE = {
@@ -421,7 +422,7 @@ function emptyBodyFailure(status, retryAfterMs, imageContent) {
 export async function postStreamed({ path, body, session, attributionUserAgent, signal, onData, timeoutMs = 300000 }) {
   // The Messages wire carries the 2.x client's beta header (o2a/headers.js);
   // the path is the only wire signal this layer sees.
-  const headers = gatewayHeaders({ session: truncateSession(session), stream: true, anthropic: path.includes('/messages') })
+  const headers = gatewayHeaders({ session: truncateSession(session), stream: true, anthropic: path.includes('/messages'), credential: resolveOpencodeCredential() })
   headers['user-agent'] = userAgentWith(attributionUserAgent)
   let response
   try {
@@ -625,7 +626,7 @@ export async function readSse(source, onData, signal, timeoutMs = 300000) {
 
 /** Fetch a small JSON document from the gateway with the fingerprint headers. */
 export async function getJson(path, { session, attributionUserAgent, signal, timeoutMs = 15000 } = {}) {
-  const headers = gatewayHeaders({ session: truncateSession(session ?? ''), stream: false, accept: 'application/json' })
+  const headers = gatewayHeaders({ session: truncateSession(session ?? ''), stream: false, accept: 'application/json', credential: resolveOpencodeCredential() })
   headers['user-agent'] = userAgentWith(attributionUserAgent)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)

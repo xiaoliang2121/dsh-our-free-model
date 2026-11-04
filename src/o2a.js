@@ -518,10 +518,10 @@ function projectID(project) {
   const sum = crypto3.createHash("sha256").update(`opencode-project\0${project}`).digest();
   return sum.subarray(0, 20).toString("hex");
 }
-function gatewayHeaders({ session, childSession, project, stream, accept, anthropic, userAgent } = {}) {
+function gatewayHeaders({ session, childSession, project, stream, accept, anthropic, userAgent, credential } = {}) {
   const headers = {
     "content-type": "application/json",
-    "authorization": `Bearer ${ANONYMOUS_CREDENTIAL}`,
+    "authorization": `Bearer ${credential ?? ANONYMOUS_CREDENTIAL}`,
     "user-agent": userAgent ?? CLIENT_UA,
     "x-opencode-client": "cli",
     "x-session-affinity": session,

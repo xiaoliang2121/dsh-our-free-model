@@ -53,6 +53,10 @@ export function findBunExecutable() {
   const candidates = [process.env.OUR_FREE_MODEL_BUN,
     process.env.BUN_INSTALL && join(process.env.BUN_INSTALL, 'bin', name),
     join(homedir(), '.bun', 'bin', name),
+    // Absolute fallbacks before the PATH scan: a sanitized environment (no PATH)
+    // must still find an installed Bun, otherwise the free lane fails with a
+    // transport error that reads like a plugin bug.
+    ...(process.platform === 'win32' ? [] : ['/usr/bin', '/usr/local/bin', '/opt/homebrew/bin'].map(dir => join(dir, name))),
     ...(process.env.PATH || '').split(delimiter).filter(Boolean).map(p => join(p.replace(/^"|"$/g, ''), name)),
     process.env.APPDATA && join(process.env.APPDATA, 'npm', 'node_modules', 'bun', 'bin', name)];
   for (const candidate of candidates.filter(Boolean)) {

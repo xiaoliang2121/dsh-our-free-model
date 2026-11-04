@@ -53,6 +53,7 @@ const suites = [
   ['picks-ui', 'picks-ui-test.mjs', []],
   ['stat-bucket-ui', 'stat-bucket-ui-test.mjs', []],
   ['free-pool', 'free-pool-test.mjs', []],
+  ['opencode-credential', 'opencode-credential-test.mjs', []],
   ['updater', 'updater-test.mjs', []],
   ['upgrade-ui', 'upgrade-ui-test.mjs', []],
   ['reload', 'reload-test.mjs', []],

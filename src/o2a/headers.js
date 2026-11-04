@@ -61,12 +61,16 @@ export function projectID(project) {
  * @param {boolean} [options.anthropic] - add the Messages-lane beta header
  * @param {string} [options.userAgent] - UA override; the lane pins
  *   {@link CLIENT_UA} (the attribution hook in src/http.js resolves to it)
+ * @param {string} [options.credential] - a real OpenCode credential (`st_` console
+ *   access token, or an `oc_`/`sk-` key) supplied by src/opencode-credential.js;
+ *   omitted means the keyless `public` pool. The 2.2.x lane no longer accepts
+ *   the anonymous identity, so a request without this answers 429.
  * @returns {Record<string, string>}
  */
-export function gatewayHeaders({ session, childSession, project, stream, accept, anthropic, userAgent } = {}) {
+export function gatewayHeaders({ session, childSession, project, stream, accept, anthropic, userAgent, credential } = {}) {
   const headers = {
     'content-type': 'application/json',
-    'authorization': `Bearer ${ANONYMOUS_CREDENTIAL}`,
+    'authorization': `Bearer ${credential ?? ANONYMOUS_CREDENTIAL}`,
     'user-agent': userAgent ?? CLIENT_UA,
     'x-opencode-client': 'cli',
     'x-session-affinity': session,
