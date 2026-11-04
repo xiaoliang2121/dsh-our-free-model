@@ -37,7 +37,7 @@ import { generateKey, rankLanAddresses, startForwardServer, startLanRelay } from
 import { chanGatewayCredential, chanGatewayEnabled, chanGatewayPort, startChanRelay } from './src/chan-relay.js'
 import { CODE, UpstreamError } from './src/http.js'
 import { egressActive, egressFetch, outletLabel, readOutletSelection, startEgressRelay } from './src/egress.js'
-import { directFetch } from './src/eac.js'
+import { directFetch, lane, proxyAddress } from './src/eac.js'
 import { clearEacUser, readEacUser, writeEacUser } from './src/eac-user.js'
 import { createEacLoginPoller } from './src/eac-login.js'
 import { unlockSealedLane } from './src/vault.js'
@@ -154,6 +154,12 @@ export function apply(ctx, config) {
 
   const stores = createRuntimeStores({ dataDir, logger })
   const { settings, stats, availability } = stores
+
+  // The EAC lane's proxy is read on every request, not captured here: saving
+  // the setting must apply to the next hop without a reload, and the store is
+  // the single source of truth. `lane.proxy` remains the higher-priority test
+  // seam (the offline suites set it directly).
+  lane.proxyConfig = () => settings.get().eacProxy
 
   if (generation > 1) {
     settings.update({ reloadedAt: Date.now(), reloadCount: generation - 1 })
@@ -2035,6 +2041,27 @@ export function createApiRoutes(deps) {
           }
           next.egress = egress
         }
+        if (patch.eacProxy !== undefined) {
+          const mode = patch.eacProxy?.mode
+          if (mode !== 'auto' && mode !== 'direct' && mode !== 'url') {
+            return send(400, { error: 'the EAC proxy mode is "auto", "direct" or "url"' })
+          }
+          // A patch without `url` keeps the stored address; the page always sends
+          // both fields, and an omitted one must not wipe what a switch back to
+          // `url` will need.
+          const raw = patch.eacProxy?.url === undefined ? current.eacProxy?.url ?? '' : patch.eacProxy.url
+          const url = String(raw).trim()
+          if (url.length > 2048) return send(400, { error: 'the EAC proxy address is too long' })
+          // `url` mode must be dialable. A bare host:port is accepted (the lane
+          // prefixes http://); anything that is not http(s) is refused here so
+          // the failure surfaces in the page instead of on the next signed call.
+          if (mode === 'url' && proxyAddress(url) === null) {
+            return send(400, { error: 'the EAC proxy needs an http(s) address' })
+          }
+          // The address survives a switch to auto/direct, so flipping back does
+          // not lose what was typed.
+          next.eacProxy = { mode, url }
+        }
         deps.settings.update(next)
         deps.settings.flush()
         if (deps.settings.writeFailed) {
@@ -2433,6 +2460,15 @@ function publicSettings(settings, forwardInfo, egressInfo) {
       latencyMs: egressInfo?.latencyMs ?? 0,
       latencyAt: egressInfo?.latencyAt ?? 0,
       error: egressInfo?.error ?? '',
+    },
+    // The EAC lane's own proxy. The address is echoed on purpose: the settings
+    // page edits it in place, and this payload only reaches the local settings
+    // page (same trust level as `settings.json`). It never enters a log line;
+    // lane errors name the host only. `auto` keeps the environment/Windows
+    // order, `direct` forces no proxy, `url` dials exactly this address.
+    eacProxy: {
+      mode: settings.eacProxy?.mode === 'direct' || settings.eacProxy?.mode === 'url' ? settings.eacProxy.mode : 'auto',
+      url: typeof settings.eacProxy?.url === 'string' ? settings.eacProxy.url : '',
     },
   }
 }

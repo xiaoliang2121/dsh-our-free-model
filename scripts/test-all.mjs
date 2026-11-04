@@ -127,6 +127,7 @@ const suites = [
   ['mint-eac-seal', 'mint-eac-seal-test.mjs', []],
   ['eac-auth', 'eac-auth-test.mjs', []],
   ['eac-abort', 'eac-abort-test.mjs', []],
+  ['eac-proxy', 'eac-proxy-test.mjs', []],
   ['eac-login', 'eac-login-test.mjs', []],
   ['kilo', 'kilo-test.mjs', []],
   ['offline', 'offline-test.mjs', []],

@@ -64,7 +64,7 @@
 - **Works without a browser UI** — only `llm` is a hard dependency, so the plugin activates on a headless composition such as dsh-tui and still serves its models. The dashboard half lives on its own fiber and mounts itself when `webServer` appears, so a composition that loads plugins before its HTTP server exists still gets its settings page. Availability probing and the background loops run on plain timers.
 - **Usage dashboard, local only** — token heatmap, cumulative curve by total or per model, output speed and time-to-first-token sampled per call. Nothing is uploaded.
 - **OpenAI-compatible forward port** — expose these models to any other local tool through a base URL plus a generated API key. Assistant string `reasoning_content` fields in Chat history are preserved for tool follow-ups, including explicit empty strings; absent fields are not fabricated.
-- **EAC lane** — a co-paid lane for DSHEAC AIO and kernel-declared `desktop`, `tauri`, `web`, or `web-desktop` profiles, with models prefixed `EAC`. Its credential is sealed; host admission and server-side GitHub authorization (sign in and star the repository) remain separate requirements. Command-line profile arguments alone do not grant access.
+- **EAC lane** — a co-paid lane for DSHEAC AIO and kernel-declared `desktop`, `tauri`, `web`, or `web-desktop` profiles, with models prefixed `EAC`. Its credential is sealed; host admission and server-side GitHub authorization (sign in and star the repository) remain separate requirements. Command-line profile arguments alone do not grant access. The EAC page also carries its own egress proxy (follow system / direct / a custom http(s) address), independent of the free lane.
 - **The Kilo channel (keyless free pool)** — the free model pool of Kilo AI's public gateway (the listing's `isFree` slice, fetched live, including the `kilo-auto/free` auto-router) is built in; no account, no key. Model cards carry a Kilo badge. Thinking effort works like the EAC lane: the model's own level menu (Off / Low / Medium / High, default High), sent for real through the gateway's unified `reasoning` parameter — Off was verified family by family to zero out thinking (nemotron, ling, dots, poolside, apodex, cohere); the stepfun and liquid endpoints refuse to disable thinking (HTTP 400) and the two auto-routers ignore it, so those models' menus omit the Off rung. The pool is the upstream's free offer, and its model cards state that prompts may be logged to improve their services — never send sensitive content; see the [Disclaimer](#disclaimer).
 - **The aggregate lane — your own key, 76 providers** — a new settings tab brings third-party endpoints into the same roster: the registry ships 76 providers (NVIDIA NIM, OpenRouter, Groq, Cerebras, SambaNova, Gemini, DeepSeek, Mistral, Together, Fireworks, SiliconFlow, Nebius, Chutes, Hugging Face, Cloudflare, Z.ai, Kimi, MiniMax, QwenCloud/Alibaba, Bedrock, Vertex, Vercel AI Gateway, Azure OpenAI, FleetRelay Gateway, plus the no-account Ollama, LM Studio and llama.cpp). Configuring a provider (a key for the ones that need one; the local no-account ones need none) turns each of its models into a `provider/model` row in the picker and on the local gateway. Keys stay in the local `0600` settings.json; the API echoes only `hasKey` and a `…abcd` fingerprint. Per provider: enable/disable, Test (a *listing* probe — it verifies a key without spending a generation), Discover, a base-URL override, a model-list override and Remove. OAuth/ADC providers are listed but marked not drivable here. OpenCode's keyless free pool is deliberately **not** a registry row: it requires a per-request minted session id, the v2 client User-Agent and a set of official tool declarations, which this lane's generic transport has nowhere to carry — listing it would only add a picker row that can never answer, and those ten models are served natively by the plugin's own free lane.
 - **Token savers** — three things: tool-output compaction (RTK) rewrites `tool_result` content in place before the request is sent (git diff / status / log, grep, find, ls, tree, build logs, numbered file dumps, search listings, duplicate log lines) — measured live, a 40 KB `git diff` lost 90% of its bytes and the model still answered about it; prompt shaping offers the caveman and ponytail families, every level off by default; and five local answers that never call a provider. The settings page reports bytes before/after, percent saved, blocks compacted and calls measured, from the same stats rows the usage charts read.
@@ -87,10 +87,12 @@ A model the gateway names but refuses to route appears in neither group. It stay
 **Not in the picker** in the settings page, with the refusal and the probe time, and returns to
 the picker by itself as soon as a probe gets through.
 
-**Settings page — `Settings → Our Free Model`**, seven sections:
+**Plugin page (local patch) — `Plugins → Our Free Model`**, seven sections:
+
+> This repository's local patch moves the entry from Settings to the Plugins page; every “settings page” below refers to that plugin page (historical verification records excepted).
 
 1. **Model roster** — per-model availability, vision vs text-only, context window, max output, the output ceiling each effort rung really sends, measured time-to-first-token, and an on-demand single-call benchmark.
-2. **EAC lane authorization** — one-click GitHub sign-in (the browser does the work; nothing to paste), the signed-in name and star verdict, a re-check button and sign-out; model cards carry a lock until authorized. The free lane is unaffected.
+2. **EAC lane authorization** — one-click GitHub sign-in (the browser does the work; nothing to paste), the signed-in name and star verdict, a re-check button and sign-out; model cards carry a lock until authorized. The same tab carries the EAC egress proxy (follow system / direct / custom). The free lane is unaffected.
 2. **Announcement center** — the owner-pushed feed: unread counter, urgency badges, mark-read (single/all), check-now button, OS-notification toggle. Bodies render HTML through the allowlist.
 3. **Usage board** — headline counters, a 17-week token heatmap, a cumulative curve switchable between tokens and request counts and between total and any single model, speed sparklines, and a per-model table.
 4. **Local forward** — enable/disable, bind host and port, copy base URL, show / copy / rotate the API key, and a ready-to-run `curl` example.
@@ -252,11 +254,11 @@ under `Our Free Model`. The selection is durable per session.
 deliberation; the ceiling is enforced on the request, so the difference is
 measurable rather than cosmetic. It is **one** ceiling shared by deliberation and
 the visible answer, which is why a model that cannot switch thinking off gets
-the whole ladder doubled (the model cards in `Settings → Our Free Model` print the
+the whole ladder doubled (the model cards in `Plugins → Our Free Model` print the
 number each rung will really send). If answers keep getting cut off, move to
 `Deep`, or raise the per-call output ceiling in the settings.
 
-**Serve other local tools.** `Settings → Our Free Model → Local forward`, enable
+**Serve other local tools.** `Plugins → Our Free Model → Local forward`, enable
 it, then copy the base URL and generate a key. Supported routes:
 
 ```text
@@ -298,7 +300,7 @@ port and the network address it settled on. While it is on, anyone who can reach
 this machine can spend its free quota with that key — enable it only on a
 network you trust, and narrow the sources with a firewall if you can.
 
-**Send requests through a proxy outlet.** `Settings → Our Free Model → Egress
+**Send requests through a proxy outlet.** `Plugins → Our Free Model → Egress
 proxy`. Optional and off by default — with it off, requests go direct. Two modes:
 
 - **Subscription mode**: paste a Clash/V2Ray subscription URL; the plugin spawns
@@ -359,7 +361,7 @@ a toast, `urgent` items open a full-screen modal, and both land in the
 announcement center with an unread marker. Enable *OS notifications* there to
 also get system-level toasts.
 
-**Upgrade the plugin.** `Settings → Our Free Model → Plugin upgrade` →
+**Upgrade the plugin.** `Plugins → Our Free Model → Plugin upgrade` →
 *Check for updates* → *Upgrade now*. The whole flow runs inside the app
 (download → verify → backup → replace → hot reload); no reinstall, no restart.
 A failed upgrade restores the previous version and reports why.
@@ -765,6 +767,8 @@ Requires Node `^22.19.0 || >=24.0.0`. No install step, no dependencies.
 Two public keyless upstreams, both dialled directly with no third party in the
 middle; the fourth destination (the EAC lane) is your own or the maintainer's
 deployed gateway, covered in its own section.
+
+The EAC lane can be pointed at its own egress proxy (follow system, forced direct, or a custom http(s) address), configured on the EAC tab and kept in the local `0600` settings.json. It applies to EAC traffic only — authorization polling, pool status, chat and the local forward; the free lane keeps its own outlet setting. An unreachable proxy fails the request with the underlying error instead of silently going direct.
 
 **The free lane: OpenCode's key-free gateway**, `https://opencode.ai/inference/v1/*`
 (moved there from `/zen/v1` on 2026-10-14; the old path answers 403 FreeTierError

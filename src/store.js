@@ -183,6 +183,11 @@ export const SETTINGS_INITIAL = {
    *  'client'` dials one http/https/socks5/socks5h URL directly. Off by
    *  default — requests go straight out until this is turned on. */
   egress: { enabled: false, mode: 'subscription', url: '', mihomoPath: '' },
+  /** EAC lane's own outbound proxy. `auto` keeps the historical order
+   *  (environment, then the Windows per-user system proxy, then direct);
+   *  `direct` forces no proxy; `url` dials exactly this http(s) address.
+   *  Independent of the free lane's `egress` outlet. */
+  eacProxy: { mode: 'auto', url: '' },
   /** Expose the absorbed channels' OpenAI gateway (the pack's loopback
    *  listener) to other machines under this plugin's own key. Off by default:
    *  a LAN listener is a door, and doors stay shut until asked for. */

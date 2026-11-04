@@ -827,7 +827,7 @@ process.exit(problems.length === 0 ? 0 : 1)
  * The page Chromium loads. It is a shell, not a stand-in for the app: it defines
  * `window.__ModuleLoader__`, hands the bundle a real React and a `require` that
  * only knows `react`, calls `apply(ctx)` with the services the bundle reads, and
- * mounts the `settings.section` component the bundle registered. Anything the
+ * mounts the `plugins.bundle.config` component the bundle registered. Anything the
  * bundle throws on the way lands in the red banner at the top of the page.
  */
 function shellHtml({ theme }) {
@@ -902,12 +902,12 @@ window.__ModuleLoader__ = {
     getSnapshot: () => ({ active }),
   }
 
-  // ── slots: record both registrations, render the section one ───────────────
-  const registrations = { section: [], onboarding: [] }
+  // ── slots: record both registrations, render the configuration one ─────────
+  const registrations = { config: [], onboarding: [] }
   const slots = {
     inject: (name, callback) => { callback(); return { [Symbol.dispose]() {} } },
     register: (options, component) => {
-      const bucket = options.name === 'settings.onboarding' ? registrations.onboarding : registrations.section
+      const bucket = options.name === 'settings.onboarding' ? registrations.onboarding : registrations.config
       bucket.push({ options, component })
       return () => {}
     },
@@ -985,8 +985,8 @@ window.__ModuleLoader__ = {
 
   let root = null
   const mount = () => {
-    const entry = registrations.section.find(row => row.options.id === 'our-free-model') ?? registrations.section[0]
-    if (entry === undefined) { window.__crash('the bundle registered no settings.section component'); return }
+    const entry = registrations.config.find(row => row.options.key === 'dsh-our-free-model') ?? registrations.config[0]
+    if (entry === undefined) { window.__crash('the bundle registered no plugins.bundle.config component'); return }
     const t = locale.bind(entry.options.locale ?? 'settings.ourFreeModel')
     if (root === null) root = ReactDOM.createRoot(document.getElementById('root'))
     root.render(React.createElement(entry.component, { t }))

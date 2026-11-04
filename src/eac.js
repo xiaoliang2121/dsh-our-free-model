@@ -43,8 +43,13 @@ const TURN_TIMEOUT_MS = 300000
  * whole point of laneFetch is that nothing else in the process can intercept
  * the signed bytes. Assignment is module-private by convention, exactly like
  * the free lane's upstream override.
+ *
+ * `proxy` stays the higher-priority seam. `proxyConfig` is the production
+ * wiring: the plugin entry assigns a getter that returns `settings.eacProxy`
+ * (`{ mode: 'auto' | 'direct' | 'url', url }`), read on every request so a
+ * settings change applies to the next hop without a reload.
  */
-export const lane = { fetch: null, proxy: undefined }
+export const lane = { fetch: null, proxy: undefined, proxyConfig: undefined }
 
 const proxyDispatchers = new Map()
 let windowsProxy
@@ -97,27 +102,54 @@ function windowsProxyFor(target, config) {
   return entries.get(target.protocol.slice(0, -1)) ?? null
 }
 
-function supportedProxy(address) {
-  if (!address) return null
+/**
+ * Normalize a proxy address to an absolute `http(s)` URL, or `null`.
+ *
+ * Serves both the environment variables (which may be a bare `host:port`) and
+ * the explicit `settings.eacProxy.url` the page writes. Only http(s) is
+ * accepted: the request path uses undici's `EnvHttpProxyAgent`, which cannot
+ * dial SOCKS; a user with a SOCKS proxy points this at the local HTTP/mixed
+ * proxy port instead. Returning `url.href` keeps the dispatcher cache keyed on
+ * one spelling of the same address.
+ */
+export function proxyAddress(value) {
+  if (typeof value !== 'string' || value.trim() === '') return null
   try {
-    const url = new URL(String(address).includes('://') ? String(address) : `http://${address}`)
-    return url.protocol === 'http:' || url.protocol === 'https:' ? address : null
+    const text = value.trim()
+    const url = new URL(text.includes('://') ? text : `http://${text}`)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
   } catch { return null }
 }
 
 async function proxyFor(target) {
   if (lane.proxy !== undefined) return typeof lane.proxy === 'function' ? lane.proxy(target) : lane.proxy
+  const configured = typeof lane.proxyConfig === 'function' ? lane.proxyConfig() : undefined
+  const mode = configured?.mode
+  // An explicit custom address that no longer parses must fail the request, not
+  // fall through to the environment: silently connecting directly would leak
+  // the signed bytes and the user's address past the proxy they asked for.
+  if (mode === 'direct') return null
+  if (mode === 'url') {
+    const address = proxyAddress(configured?.url)
+    if (address !== null) return address
+    throw new UpstreamError(
+      'the EAC proxy is set to a custom address, but no valid http(s) proxy is configured',
+      CODE.transport,
+    )
+  }
+  // `auto` (and any unrecognized hand-edited value): the pre-existing order —
+  // environment, then the Windows per-user manual proxy, then direct.
   const env = process.env
   const address = (target.protocol === 'https:' ? env.HTTPS_PROXY ?? env.https_proxy : env.HTTP_PROXY ?? env.http_proxy)
     ?? env.ALL_PROXY ?? env.all_proxy
-  if (address) return proxyBypassed(target, env.NO_PROXY ?? env.no_proxy ?? '') ? null : supportedProxy(address)
+  if (address) return proxyBypassed(target, env.NO_PROXY ?? env.no_proxy ?? '') ? null : proxyAddress(address)
   if (process.platform !== 'win32') return null
   if (windowsProxy === undefined || Date.now() - windowsProxyAt >= 30_000) {
     windowsProxyAt = Date.now()
     windowsProxy = readWindowsProxy()
   }
   const config = await windowsProxy
-  return config === null ? null : supportedProxy(windowsProxyFor(target, config))
+  return config === null ? null : proxyAddress(windowsProxyFor(target, config))
 }
 
 // The proxy path needs undici's proxy-aware dispatcher. undici ships only as a

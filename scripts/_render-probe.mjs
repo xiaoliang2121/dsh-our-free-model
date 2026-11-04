@@ -1,9 +1,9 @@
 /**
- * Mini-render probe: mounts the settings section with a stub React that has
- * just enough state to re-render after async data lands, and throws the moment
- * any plain object appears where React expects an element (production error
- * #31). This is the offline reproduction of the "blank settings page" class of
- * bugs — run it against any page by seeding localStorage's active tab.
+ * Mini-render probe: mounts the plugin-page configuration section with a stub
+ * React that has just enough state to re-render after async data lands, and
+ * throws the moment any plain object appears where React expects an element
+ * (production error #31). This is the offline reproduction of the "blank page"
+ * class of bugs — run it against any page by seeding localStorage's active tab.
  *
  * Run: node scripts/_render-probe.mjs [tabName]
  */
@@ -18,7 +18,7 @@ const activeTab = process.argv[2] ?? 'gateway'
 // ── fake backend: same-origin payloads the pages read ────────────────────────
 const summary = {
   catalog: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', availability: 'available', vision: false, route: 'our-free-model', channel: undefined, contextWindow: 1000000, maxOutput: 32768, reasoning: true }],
-  settings: { enabled: true, forward: { enabled: false, host: '127.0.0.1', port: 18899, lan: { enabled: false, port: 0 } }, egress: { enabled: false }, probeIntervalMinutes: 15, defaultMaxTokens: 32768, notifyOs: false, autoReloadWatch: false, updateCheckHours: 6, reloadCount: 0, reloadedAt: 0 },
+  settings: { enabled: true, forward: { enabled: false, host: '127.0.0.1', port: 18899, lan: { enabled: false, port: 0 } }, egress: { enabled: false }, eacProxy: { mode: 'auto', url: '' }, probeIntervalMinutes: 15, defaultMaxTokens: 32768, notifyOs: false, autoReloadWatch: false, updateCheckHours: 6, reloadCount: 0, reloadedAt: 0 },
   egress: { country: 'CN' }, outlet: { running: false }, probedAt: Date.now(),
   announcementVersion: 'x', version: '2.0.0', distribution: 'self',
   announcements: { unread: 0, fetchedAt: 0 },
@@ -34,6 +34,7 @@ const routes = {
   '/eac/status': summary.eacAuth,
   '/chan-gateway': { relay: { enabled: true, running: true, host: '127.0.0.1', port: 18326, hasKey: true, error: '' }, gateway: { port: 8326, enabledByEnv: true, keyFound: true, keyFromEnv: false, keyPath: 'x' } },
   '/announcement': { version: 'x', acknowledged: true },
+  '/disclaimer': { acknowledged: true },
   '/announcements': { items: [], unread: 0, fetchedAt: 0, notifyOs: false },
 }
 globalThis.fetch = url => {
@@ -90,7 +91,13 @@ const stubReact = {
     }
     return [hookState.get(key), set]
   },
-  useRef: () => ({ current: null }),
+  useRef(initial) {
+    // Honour the initial value and keep the same object across passes: the
+    // upgrade panel stores its control object in a ref on first render.
+    const key = `${callKey}#r${hookIdx += 1}`
+    if (!hookState.has(key)) hookState.set(key, { current: typeof initial === 'function' ? initial() : initial })
+    return hookState.get(key)
+  },
   useMemo: factory => factory(),
   useCallback: fn => fn,
   Fragment: 'fragment',
@@ -123,7 +130,7 @@ function visit(el, path, out) {
   for (const [index, child] of (el.children ?? []).entries()) visit(child, `${path}/${String(el.type)}[${index}]`, out)
 }
 
-// ── boot the bundle and mount the section ────────────────────────────────────
+// ── boot the bundle and mount the plugin-page section ────────────────────────
 new Function('window', 'document', 'navigator', source)(globalThis.window, globalThis.document, globalThis.navigator)
 const registered = globalThis.__registered
 const exports = registered.factory(name => {
@@ -175,7 +182,7 @@ const ctx = {
     },
   },
   slots: {
-    inject: (name, register) => { if (name === 'settings.section') register() },
+    inject: (name, register) => { if (name === 'plugins.bundle.config') register() },
     register: (options, render) => sections.push({ options, render }),
   },
 }
@@ -183,7 +190,7 @@ exports.apply(ctx)
 
 const section = sections[0]
 if (section === undefined) {
-  console.log('PROBE: settings.section was never registered')
+  console.log('PROBE: plugins.bundle.config was never registered')
   process.exit(1)
 }
 

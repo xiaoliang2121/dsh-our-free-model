@@ -2,10 +2,13 @@
  * Static checks over the browser half.
  *
  *   1. the ModuleLoader bundle registers itself and exports a plugin object;
- *   2. every literal `t('key')` in the source exists in BOTH dictionaries, no
+ *   2. the UI registers in `plugins.bundle.config` under this package name, and
+ *      the settings panel carries no section for it — the host ignores a wrong
+ *      bundle key without an error, and the entry lives on the Plugins page;
+ *   3. every literal `t('key')` in the source exists in BOTH dictionaries, no
  *      dictionary key goes unused, and the two key sets match — the shell shows
  *      the raw key when a lookup misses, which reads as a broken UI;
- *   3. every `ofm_*` class the code emits is defined in the injected stylesheet,
+ *   4. every `ofm_*` class the code emits is defined in the injected stylesheet,
  *      and every declared rule is reachable.
  *
  * Run: node scripts/client-lint.mjs
@@ -61,6 +64,21 @@ if (record === undefined) {
       if (service !== 'slots' && service !== 'locale') problems.push(`unexpected injected service "${service}"`)
     }
   }
+}
+
+// ── where the UI registers ───────────────────────────────────────────────────
+// The host renders a bundle's configuration only when `plugins.bundle.config`
+// carries a key equal to the package name; any other key is ignored **without
+// an error**. Assert the registration shape so a merge from upstream cannot
+// silently move the page back into the settings panel.
+if (!source.includes("slots.inject('plugins.bundle.config'")) {
+  problems.push('the browser half must register its page in plugins.bundle.config')
+}
+if (!source.includes("key: 'dsh-our-free-model'")) {
+  problems.push('plugins.bundle.config must be keyed by this package name')
+}
+if (source.includes("name: 'settings.section'")) {
+  problems.push('the settings panel must not carry a section for this plugin')
 }
 
 // ── dictionary coverage ──────────────────────────────────────────────────────

@@ -62,7 +62,7 @@
 - **不依赖浏览器界面**——插件仅将 llm 作为硬依赖，在没有 web server 的 composition（如 dsh-tui）中同样完成启动并输出模型；看板模块挂载在独立的 fiber 上，待 webServer 就绪后再注册路由，因此既不会阻塞模型车道，也不会因插件先于 web 服务加载而永久丢失设置页。
 - **用量看板，数据全部留在本机**——Token 热力图、总量曲线（支持总计与单模型视图）、输出速度与首字延迟逐次采样。不上传任何数据。
 - **OpenAI 兼容转发端口**——本机其它工具通过 base URL 与 Key 即可调用这些模型。Chat 历史中 assistant 的字符串 `reasoning_content` 会随工具后续请求保留，包括显式空字符串；缺失字段不会被补造。
-- **EAC 渠道（桌面端专属）**——在 DeepSeek Harness 桌面端与 DSHEAC AIO 桌面端中自动解锁一条协付通道，模型以 EAC 前缀显示（如 EAC DeepSeek V4.1 Flash）；凭据加密密封，由宿主指纹闸门把守；该渠道在服务器侧校验 GitHub 授权（登录并 star 本仓库）后才放行对话；在命令行及其它宿主中该通道完全不存在。详见「EAC 渠道」。
+- **EAC 渠道（桌面端专属）**——在 DeepSeek Harness 桌面端与 DSHEAC AIO 桌面端中自动解锁一条协付通道，模型以 EAC 前缀显示（如 EAC DeepSeek V4.1 Flash）；凭据加密密封，由宿主指纹闸门把守；该渠道在服务器侧校验 GitHub 授权（登录并 star 本仓库）后才放行对话；该页可单独配置出口代理（跟随系统 / 直连 / 指定 http(s) 代理），不影响免费车道；在命令行及其它宿主中该通道完全不存在。详见「EAC 渠道」。
 - **Kilo 渠道（免密免费池）**——内置 Kilo AI 公共网关的免费模型池（`isFree` 清单实时拉取，含 `kilo-auto/free` 自动路由），无需任何账号或 Key；模型卡带 Kilo 徽章。思考强度与 EAC 渠道同款：模型自身的档位菜单（Off / Low / Medium / High，默认 High），经网关统一的 `reasoning` 参数真实下发——Off 已逐家族实测将思考归零（nemotron、ling、dots、poolside、apodex、cohere）；stepfun 与 liquid 端点强制思考（对关闭请求返回 400）、两个自动路由不透传关闭，这些模型的菜单不含 Off 档。该池由上游免费提供，上游会在其模型卡中声明 prompt 可能被记录用于改进服务——请勿发送敏感内容，详见「免责声明」。
 - **聚合渠道，自带 Key**——设置页新增一页，把第三方端点接进同一条模型清单：注册表内置 76 家提供商（NVIDIA NIM、OpenRouter、Groq、Cerebras、SambaNova、Gemini、DeepSeek、Mistral、Together、Fireworks、SiliconFlow、Nebius、Chutes、Hugging Face、Cloudflare、Z.ai、Kimi、MiniMax、QwenCloud/Alibaba、Bedrock、Vertex、Vercel AI Gateway、Azure OpenAI、FleetRelay Gateway，以及无需账号的 Ollama、LM Studio、llama.cpp），写入 Key（本机免账号的提供商不需要）后其模型即以 `provider/model` 出现在选择器里，也可经本地网关调用。Key 只写入本机 0600 的 settings.json，API 只回显 `hasKey` 与 `…abcd` 指纹；每家可单独启停、测试（列表探测，不花一次生成）、发现模型、覆盖 Base URL 与模型清单。OAuth 与 ADC 认证的提供商照常列出，但标注为不可驱动。
 - **省 Token**——三件事：工具输出压缩（RTK）在请求发出前就地重写 `tool_result`（git diff / status / log、grep、find、ls、tree、构建日志、编号转储、搜索清单、重复日志行），实测 40 KB 的 `git diff` 移除 90% 的字节且模型仍能就它作答；提示词瘦身有 caveman 与 ponytail 两族、默认全关；另有五个不占用上游请求的本地应答。设置页用与用量图表同一批统计行显示压缩前后字节、节省比例、压缩块数与统计调用数。
@@ -86,7 +86,9 @@
 被判定为「已声明但不路由」的模型不出现在任何分组中——它们仅在设置页的「不在选择器中」分组保留记录，
 附带拒因与探测时间；后续探测重新通过后自动回到选择器。
 
-**设置页** 设置 → Our Free Model，包含七个分区：
+**插件页（本地补丁）** 侧栏 → 插件 → Our Free Model，包含七个分区：
+
+> 本仓库的本地补丁把入口从「设置」移到了「插件」页；下文各处的「设置页」均指这个插件页（历史验证记录除外）。
 
 - **模型清单**——各模型的可用性、是否支持视觉、上下文窗口、最长输出、各思考档位实际下发的输出上限、实测首字延迟，以及单次调用基准测试按钮。
 - **EAC 渠道授权**——一键发起 GitHub 登录（自动打开浏览器，无需复制粘贴）、显示登录名与 star 校验状态、重新检查、退出登录；未授权时模型卡带锁标记。免费车道的模型不受影响。
@@ -272,11 +274,11 @@ shasum -a 256 ~/Downloads/Our.Free.Model_<version>_aarch64.dmg
 **调整思考强度**：同一菜单中的 Effort。声明了思考档位的模型给出它自己的档位（如 Off / Low /
 High / Max），选中值按原值下发；其余模型给 Light / Balanced / Deep 三档，档位越高思考占用的
 输出预算越多，上限为强制下发，因此档位之间存在可测量的差异。思考与可见回答共享同一输出额度，
-因此思考不可关闭的模型会将三档整体上移（设置 → Our Free Model 的模型卡上标注了每档的
+因此思考不可关闭的模型会将三档整体上移（插件 → Our Free Model 的模型卡上标注了每档的
 实际数值，声明档位的模型则标注档位名）。若回答被截断，可切换至更高档，或调高设置中的
 单次输出上限。
 
-**供本机其它工具调用**：设置 → Our Free Model → 本地转发，启用后复制 base URL 并生成 Key。支持：
+**供本机其它工具调用**：插件 → Our Free Model → 本地转发，启用后复制 base URL 并生成 Key。支持：
 
 - GET /v1/models
 - POST /v1/chat/completions（流式与非流式）
@@ -306,7 +308,7 @@ reasoning、reasoning_content、reasoning_text 三个字段识别——同一段
 `urgent` 级别直接触发全屏弹窗，两者均会进入公告中心并保留未读标记。如需同时接收
 系统级通知，在公告中心点击"开启系统通知"。
 
-**升级插件**：设置 → Our Free Model → 插件升级 → 检查更新 → 立即升级。全流程
+**升级插件**：插件 → Our Free Model → 插件升级 → 检查更新 → 立即升级。全流程
 在应用内完成（下载 → 校验 → 备份 → 替换 → 热重载），无需重新安装，也无需
 重启应用。升级失败会自动回滚至上一版本并给出失败原因。
 
@@ -696,6 +698,8 @@ DeepSeek Harness 桌面端（Electron 壳）与 DSH Tauri：使用内核提供�
 加密密封：渠道凭据与端点从不以可读形式出现在插件中——它们仅以 AES-256-GCM 密文存在，解密密钥由分散在两个文件中的三片掩码分片在解锁时即时派生；非授权宿主不进入派生路径，密文对搜索引擎与字符串扫描而言仅为噪声。
 
 凭据不落盘、不出进程：解锁按请求即时发生，明文仅存在于构造请求的那一帧中，不写入文件、不进入日志、不出现在任何 API 响应或错误消息中。
+
+**出口代理**：EAC 页的「出口代理」分区提供三档——**跟随系统**（默认；按 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` → Windows 用户手动系统代理 → 直连的顺序解析，环境代理遵守 `NO_PROXY`）、**直连**（强制忽略环境与系统代理）、**指定代理**（只走填入的 http/https 地址；`host:port` 简写也接受，需要认证时写 `http://用户名:密码@host:port`）。设置只作用于 EAC 车道的出网（授权轮询、资源池状态、对话与本地转发里的 EAC 模型），免费车道仍使用「免费模型」页自己的出口设置；保存后下一次请求即生效，无需重载。代理连不上时请求会失败并保留底层错误码，**不会**自动改直连——否则已签名的字节会绕过用户指定的代理。SOCKS 代理请指向本地 HTTP/混合代理端口。
 
 签名网关（推荐形态）：worker/ 目录附带一个 Cloudflare Worker 网关——插件密封的仅有网关地址与 HMAC 签名密钥，请求按 时间戳 + HMAC-SHA256(方法/路径/ body 摘要) 签名，中继的真实 key 仅存放于 Worker 的环境变量中；防重放时间窗、模型白名单、可选按 IP 限速均在网关执行，签名密钥泄露只需在网关侧轮换即可全体吊销。部署与轮换见 worker/README.md。
 

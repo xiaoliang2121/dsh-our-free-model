@@ -2,9 +2,11 @@
  * Our Free Model — browser half.
  *
  * Contributes three things to the web shell:
- *   1. a settings section (`settings.section` id `our-free-model`) holding the
- *      model roster with live availability, the usage dashboard, the OpenAI
- *      forward listener and the plugin's own switches;
+ *   1. a plugin-page configuration section (`plugins.bundle.config`, keyed by
+ *      this package name) holding the model roster with live availability, the
+ *      usage dashboard, the OpenAI forward listener and the plugin's own
+ *      switches — the settings panel no longer carries a section for this
+ *      plugin;
  *   2. a first-run announcement (`settings.onboarding`) that is versioned, so
  *      bumping the copy re-announces once and never nags again;
  *   3. nothing else — no shadowing of the stock model picker, whose grouping by
@@ -40,7 +42,6 @@ window.__ModuleLoader__.load({
         'meta.title': 'Our Free Model',
         'meta.description': '在 DeepSeek Harness 内直连免密免费模型：清单随上游更新、地区可用性按需探测、思考强度真实生效，并附 Token 看板与 OpenAI 兼容转发端口。',
         'ann.pitch': '你只需在 dsh 里装上这个插件，无需登录、注册、填 API Key 或任何其它操作，就能用上包括 Muse Spark 1.3、MiMo V2.6 在内的前沿模型——完全免费，不限量。',
-        nav: 'Our Free Model',
         title: 'Our Free Model',
         refresh: '刷新清单',
         reprobe: '重新探测可用性',
@@ -111,6 +112,18 @@ window.__ModuleLoader__.load({
         'pool.capacityUnknown': 'Star 数据暂不可用',
         'section.eac': 'EAC 渠道授权',
         'section.eacHint': 'EAC（协付）模型需要 GitHub 登录并 star 仓库；免费车道的模型不受影响。',
+        'section.eacProxy': 'EAC 出口代理',
+        'section.eacProxyHint': 'EAC 车道可单独走代理或强制直连；免费车道有自己的出口设置，两者互不影响。',
+        'eacProxy.auto': '跟随系统',
+        'eacProxy.direct': '直连',
+        'eacProxy.url': '指定代理',
+        'eacProxy.effective': '当前生效',
+        'eacProxy.effectiveAuto': '跟随系统 / 环境变量代理',
+        'eacProxy.effectiveDirect': '直连（已强制）',
+        'eacProxy.effectiveUrl': '指定代理 · {host}',
+        'eacProxy.placeholder': 'http://127.0.0.1:7890',
+        'eacProxy.apply': '应用',
+        'eacProxy.note': '仅影响 EAC 车道的出网（授权轮询、池状态、对话与本地转发）；支持 http:// 与 https://，需要认证时把 用户名:密码@ 写进地址。代理连不上时请求会失败，不会自动改直连。',
         'eac.pillOk': '已授权',
         'eac.pillLocked': '未授权',
         'eac.pillRequired': '已开启强制',
@@ -261,7 +274,7 @@ window.__ModuleLoader__.load({
         'ann.features': '功能介绍',
         'ann.later': '稍后再说',
         'ann.page': '第 {n} / {total} 页',
-        'ann.openSettings': '打开设置页',
+        'ann.openSettings': '前往插件页',
         'disclaimer.version': '免责声明版本 v{n}',
         'disclaimer.saving': '保存中…',
         'disclaimer.reopen': '使用须知与免责声明',
@@ -273,7 +286,7 @@ window.__ModuleLoader__.load({
         'ann.n3': '两个模型都真实支持思考档位（低 / 高 / 最大），DeepSeek 还能关闭思考；档位直接下发到上游，不是提示词。',
         'ann.s1': '在输入框的模型选择器里选 “Our Free Model” 分组下的任意模型。',
         'ann.s2': '需要更强推理时点开 Effort 档位；它是真实下发的输出预算，不是提示词。',
-        'ann.s3': '想被其它本地工具调用：设置页 → 本地转发 → 启用，把 Base URL 和 Key 填进去。',
+        'ann.s3': '想被其它本地工具调用：插件页 → 本地转发 → 启用，把 Base URL 和 Key 填进去。',
         'ann.s4': '地区受限模型会在你切换网络出口后自动重新归类，无需手动操作。',
         'ann.f1': '模型清单：可用性、上下文长度、是否支持视觉、是否可调思考。',
         'ann.f2': 'Token 热力图与总量曲线，支持总计与按模型分别查看。',
@@ -283,7 +296,7 @@ window.__ModuleLoader__.load({
         'ann.updates': '公告与升级',
         'ann.u1': '公告中心：仓库主人推送的新公告会实时到达，支持图文排版（HTML）。',
         'ann.u2': '系统通知：开启后，新公告与插件更新会弹出系统级通知。',
-        'ann.u3': '应用内升级：自主管理的安装可在设置页升级；宿主管理的安装请通过原安装方式更新。',
+        'ann.u3': '应用内升级：自主管理的安装可在插件页升级；宿主管理的安装请通过原安装方式更新。',
         'ann.u4': '自主管理的安装可尝试应用内升级与热重载；宿主管理的安装请通过原安装方式更新，按宿主提示重新加载。',
         'section.news': '公告中心',
         'section.newsHint': '公告由仓库主人推送，本页实时接收。',
@@ -347,7 +360,7 @@ window.__ModuleLoader__.load({
         'reload.auto': '文件变化自动热重载',
         'toast.annTitle': '新公告',
         'toast.updateTitle': '插件可升级',
-        'toast.updateBody': '发现新版本 {latest}（当前 {current}），可到设置页升级。',
+        'toast.updateBody': '发现新版本 {latest}（当前 {current}），可到插件页升级。',
         'nav.tab.free': '免费模型',
         'nav.tab.eac': 'EAC 模型',
         'nav.tab.channels': 'EAC router',
@@ -817,7 +830,6 @@ window.__ModuleLoader__.load({
         'meta.title': 'Our Free Model',
         'meta.description': 'Free no-key models inside DeepSeek Harness: a roster that follows upstream, on-demand regional availability, genuinely enforced thinking levels, a token dashboard and an OpenAI-compatible local forward port.',
         'ann.pitch': 'All you do is install this plugin in dsh — no login, no sign-up, no API key, no other step of any kind. The frontier models are simply there, Muse Spark 1.3 and MiMo V2.6 among them. Completely free, with no usage cap.',
-        nav: 'Our Free Model',
         title: 'Our Free Model',
         refresh: 'Refresh roster',
         reprobe: 'Re-probe availability',
@@ -913,6 +925,18 @@ window.__ModuleLoader__.load({
         'pool.capacityUnknown': 'star data unavailable',
         'section.eac': 'EAC lane authorization',
         'section.eacHint': 'EAC (co-paid) models need a GitHub login and a star; the free lane is unaffected.',
+        'section.eacProxy': 'EAC egress proxy',
+        'section.eacProxyHint': 'The EAC lane can use its own proxy or force a direct connection; the free lane keeps its own outlet setting.',
+        'eacProxy.auto': 'Follow system',
+        'eacProxy.direct': 'Direct',
+        'eacProxy.url': 'Custom proxy',
+        'eacProxy.effective': 'In effect',
+        'eacProxy.effectiveAuto': 'System / environment proxy',
+        'eacProxy.effectiveDirect': 'Direct (forced)',
+        'eacProxy.effectiveUrl': 'Custom proxy · {host}',
+        'eacProxy.placeholder': 'http://127.0.0.1:7890',
+        'eacProxy.apply': 'Apply',
+        'eacProxy.note': 'Affects EAC lane traffic only (authorization polling, pool status, chat and local forward); http:// and https:// are supported, and when the proxy needs authentication put user:password@ in the address. An unreachable proxy fails the request — it never silently switches to direct.',
         'eac.pillOk': 'authorized',
         'eac.pillLocked': 'not authorized',
         'eac.pillRequired': 'enforced',
@@ -1038,7 +1062,7 @@ window.__ModuleLoader__.load({
         'ann.features': 'What it does',
         'ann.later': 'Later',
         'ann.page': 'Page {n} of {total}',
-        'ann.openSettings': 'Open settings',
+        'ann.openSettings': 'Open the plugin page',
         'disclaimer.version': 'Disclaimer v{n}',
         'disclaimer.saving': 'Saving…',
         'disclaimer.reopen': 'Terms & disclaimer',
@@ -1050,7 +1074,7 @@ window.__ModuleLoader__.load({
         'ann.n3': 'Both expose real thinking levels (Low / High / Max), and DeepSeek can also switch thinking off; the level goes to the upstream as-is, not as a prompt hint.',
         'ann.s1': 'Pick any model under the “Our Free Model” group in the composer’s model selector.',
         'ann.s2': 'For harder reasoning, open the Effort menu — it sends a real budget, not a prompt hint.',
-        'ann.s3': 'To serve other local tools: Settings → Local forward → enable, then copy the base URL and key.',
+        'ann.s3': 'To serve other local tools: Plugins → Local forward → enable, then copy the base URL and key.',
         'ann.s4': 'Region-limited models reclassify themselves once your network egress changes.',
         'ann.f1': 'Model roster: availability, context length, vision, tunable thinking.',
         'ann.f2': 'Token heatmap and cumulative curve, per total or per model.',
@@ -1060,7 +1084,7 @@ window.__ModuleLoader__.load({
         'ann.updates': 'News & upgrades',
         'ann.u1': 'Announcement center: pushes from the repository owner arrive live, with rich (HTML) layout.',
         'ann.u2': 'OS notifications: once enabled, new announcements and plugin updates raise system-level toasts.',
-        'ann.u3': 'In-app upgrades: self-managed installs can update from settings; host-managed installs use their original installation method.',
+        'ann.u3': 'In-app upgrades: self-managed installs can update from the plugin page; host-managed installs use their original installation method.',
         'ann.u4': 'Self-managed installs can use in-app upgrades and hot reload. For host-managed installs, update through the original installation method and reload as instructed by the host.',
         'section.news': 'Announcement center',
         'section.newsHint': 'Published by the repository owner; this page receives them live.',
@@ -1124,7 +1148,7 @@ window.__ModuleLoader__.load({
         'reload.auto': 'Hot-reload on file change',
         'toast.annTitle': 'New announcement',
         'toast.updateTitle': 'Plugin update available',
-        'toast.updateBody': 'Version {latest} is out (installed {current}). Upgrade from the settings page.',
+        'toast.updateBody': 'Version {latest} is out (installed {current}). Upgrade from the plugin page.',
         'nav.tab.free': 'Free models',
         'nav.tab.eac': 'EAC models',
         'nav.tab.channels': 'EAC router',
@@ -2680,7 +2704,7 @@ window.__ModuleLoader__.load({
 
     async function api(path, options) {
       // 8 秒超时兜底：后端路由未注册/挂起时 fetch 不再永久挂起——此前全部 api 调用
-      // （onboarding /announcement、设置页 /announcements /update/status、面板 /summary /stats
+      // （onboarding /announcement、插件页 /announcements /update/status、面板 /summary /stats
       // /forward/key 等）无任何超时，一个不响应端点即可阻塞 settings.onboarding 协调流程
       // 并长期占用同源连接池。超时按 AbortError 抛给调用方，走各自 .catch 降级路径。
       // 慢路由按需放宽（options.timeout，毫秒）：/bench 要等一整段真实生成（本车道
@@ -2929,7 +2953,7 @@ window.__ModuleLoader__.load({
 
     // ── toasts: a vanilla-DOM host so pushes surface on every page ───────────
     // Slot content only exists where the shell mounts it; a toast that lived
-    // inside the settings section would be invisible everywhere else. This
+    // inside the plugin-page section would be invisible everywhere else. This
     // host attaches to document.body, outside the app root, and needs no
     // react-dom — the body renders through the same allowlist parser.
     function toastHost() {
@@ -6794,7 +6818,7 @@ window.__ModuleLoader__.load({
           : null)
     }
 
-    // ── settings page ─────────────────────────────────────────────────────────
+    // ── plugin page ───────────────────────────────────────────────────────────
     function SettingsPage(props) {
       const tagged = props.locale === undefined ? props.t : Object.assign(x => props.t(x), { locale: props.locale })
       const t = tagged
@@ -6861,7 +6885,7 @@ window.__ModuleLoader__.load({
     }
 
     // ── the three-page shell ──────────────────────────────────────────────────
-    // The settings section used to be one long scroll. It is now three pages
+    // This page used to be one long scroll. It is now three pages
     // behind one glass navigation bar, because the three lanes answer three
     // different questions and mixing them pushed the model roster — the thing
     // people actually open this page for — below the fold:
@@ -7306,6 +7330,56 @@ window.__ModuleLoader__.load({
         h(Section, { title: t('section.news'), hint: t('section.newsHint') }, h(NewsPanel, { t })))
     }
 
+    // ── EAC outbound proxy ────────────────────────────────────────────────────
+    // The lane has three proxies in a fixed priority: the explicit address, the
+    // environment/system pair, or none. The page offers exactly that choice —
+    // "直连" is a real, saved state, not the absence of a setting, so a user who
+    // knows their proxy is the problem can force a direct hop without clearing
+    // the address. The setting is read per request by src/eac.js, so applying it
+    // needs no reload.
+    const EAC_PROXY_MODES = ['auto', 'direct', 'url']
+
+    function EacProxy(props) {
+      const { settings, t, onApply, busy } = props
+      const stored = settings?.eacProxy ?? {}
+      const configuredMode = EAC_PROXY_MODES.includes(stored.mode) ? stored.mode : 'auto'
+      const [mode, setMode] = useState(configuredMode)
+      const [url, setUrl] = useState(typeof stored.url === 'string' ? stored.url : '')
+      useEffect(() => {
+        setMode(configuredMode)
+        setUrl(typeof stored.url === 'string' ? stored.url : '')
+      }, [configuredMode, stored.url])
+      const address = typeof url === 'string' ? url.trim() : ''
+      // The page holds whatever the user typed (a bare host:port is accepted by
+      // the lane); the status line only needs the host, never the credential.
+      const hostOf = value => {
+        if (value === '') return ''
+        try { return new URL(value.includes('://') ? value : `http://${value}`).host } catch { return '' }
+      }
+      const effective = mode === 'direct'
+        ? t('eacProxy.effectiveDirect')
+        : mode === 'url'
+          ? t('eacProxy.effectiveUrl').replace('{host}', hostOf(address) || '—')
+          : t('eacProxy.effectiveAuto')
+      const apply = () => onApply({ eacProxy: { mode, url: address } })
+      return h(Panel, null,
+        h('div', { className: 'ofm_row' },
+          h('div', { className: 'ofm_seg' },
+            segButton(t('eacProxy.auto'), mode === 'auto', () => setMode('auto')),
+            segButton(t('eacProxy.direct'), mode === 'direct', () => setMode('direct')),
+            segButton(t('eacProxy.url'), mode === 'url', () => setMode('url'))),
+          h('span', { className: 'ofm_note', style: { flex: 1 } }, `${t('eacProxy.effective')} · ${effective}`),
+          mode === 'url' ? null : h(Button, { kind: 'primary', disabled: busy, onClick: apply }, t('eacProxy.apply'))),
+        mode === 'url' ? h('div', { className: 'ofm_row' },
+          field(t('eacProxy.url'), h('input', {
+            className: 'ofm_input', style: { flex: 1, minWidth: 260 }, value: url, spellCheck: false,
+            placeholder: t('eacProxy.placeholder'),
+            onChange: event => setUrl(event.target.value),
+          })),
+          h(Button, { kind: 'primary', disabled: busy || address === '', onClick: apply }, t('eacProxy.apply'))) : null,
+        h('div', { className: 'ofm_note' }, t('eacProxy.note')))
+    }
+
     function EacPage(props) {
       const { t, data, summary, eacAuth, setEacAuth, eacLogin, busy, catalogBusy, apply, bench, benches, refresh, reprobe } = props
       const { pool, poolError } = usePool()
@@ -7360,6 +7434,7 @@ window.__ModuleLoader__.load({
                 h(Button, { disabled: busy || catalogBusy, onClick: refresh }, catalogBusy || summary.status === 'loading' ? t('probing') : t('refresh')),
                 h(Button, { disabled: busy || catalogBusy, onClick: reprobe }, t('reprobe')))))),
         h(Section, { title: t('section.eac'), hint: t('section.eacHint') }, h(EacAuth, { t, auth: eacAuth, eacLogin })),
+        h(Section, { title: t('section.eacProxy'), hint: t('section.eacProxyHint') }, h(EacProxy, { settings: data.settings, t, onApply: apply, busy })),
         h(Section, { title: t('section.models'), hint: t('section.modelsHint') }, h(Roster, { summary: data, t, onBench: bench, benches, auth: eacAuth, eacLogin, only: 'eac', onApply: apply, busy })),
         h(Section, { title: t('section.news'), hint: t('section.newsHint') }, h(NewsPanel, { t })))
     }
@@ -7417,7 +7492,7 @@ window.__ModuleLoader__.load({
     }
 
     function Announcement(props) {
-      const { t, complete, openSection, page, setPage, summary, acknowledged } = props
+      const { t, complete, openSettings, page, setPage, summary, acknowledged } = props
       useEffect(() => { if (acknowledged) complete() }, [acknowledged, complete])
       /* Not `#root.inert`, even though the shell does that for its own onboarding
          modals: those portal out of `#root`, while a slot-mounted step stays
@@ -7448,7 +7523,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'spacer' }),
             page === 0 ? h(Button, { kind: 'ghost', onClick: finish }, t('ann.later')) : h(Button, { kind: 'ghost', onClick: () => setPage(p => Math.max(0, p - 1)) }, '‹'),
             last
-              ? h(Button, { kind: 'primary', onClick: async () => { await finish(); openSection?.('our-free-model') } }, t('ann.openSettings'))
+              ? h(Button, { kind: 'primary', onClick: async () => { await finish(); openSettings?.() } }, t('ann.openSettings'))
               : h(Button, { kind: 'primary', onClick: () => setPage(p => Math.min(PAGES.length - 1, p + 1)) }, '›')))), host)
     }
 
@@ -7620,20 +7695,43 @@ window.__ModuleLoader__.load({
         return () => {}
       }, 'our-free-model: reload notice')
 
-      ctx.slots.inject('settings.section', () => ctx.slots.register({
-        name: 'settings.section',
-        id: 'our-free-model',
-        order: 35,
-        label: () => t('nav'),
+      // The Plugins page renders a bundle's own configuration between the
+      // package description and its component rows. The key is the bundle's
+      // package name — a wrong key is silently ignored by the host — and the
+      // page only asks for `view: 'page'`. The settings panel no longer carries
+      // a section for this plugin.
+      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+        name: 'plugins.bundle.config',
+        key: 'dsh-our-free-model',
         locale: NS,
       }, props => h(SettingsPage, { ...props, locale: localeTag(ctx), ctx })))
+
+      // The first-run announcement used to deep-link into the settings panel.
+      // The plugin page is the only entry now, so its call to action opens the
+      // bundle page through the plugin manager's optional navigation service.
+      // Headless and profile-less compositions have no such service; there the
+      // button simply closes the dialog.
+      const openPluginPage = () => {
+        try {
+          const navigation = ctx.get?.('pluginNavigation')
+          if (typeof navigation?.openBundle === 'function') {
+            navigation.openBundle('dsh-our-free-model')
+            return true
+          }
+        } catch { /* service absent or disposed */ }
+        return false
+      }
 
       ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
         name: 'settings.onboarding',
         id: 'our-free-model-announcement',
         order: -50,
         locale: NS,
-      }, props => h(AnnouncementGate, { ...props, t: Object.assign(x => t(x), { locale: localeTag(ctx) }) })))
+      }, props => h(AnnouncementGate, {
+        ...props,
+        openSettings: () => { openPluginPage() },
+        t: Object.assign(x => t(x), { locale: localeTag(ctx) }),
+      })))
     }
     /**
      * Owns the announcement's readiness.
@@ -7645,7 +7743,7 @@ window.__ModuleLoader__.load({
      * the user already acknowledged the current copy version.
      */
     function AnnouncementGate(props) {
-      const { t, complete, openSection, explicit } = props
+      const { t, complete, openSettings, explicit } = props
       const [ack, setAck] = useState(undefined)
       const [summary, setSummary] = useState(undefined)
       const [page, setPage] = useState(0)
@@ -7669,7 +7767,7 @@ window.__ModuleLoader__.load({
         if (acknowledged) complete?.()
       }, [ack, acknowledged, complete])
       if (ack === undefined || acknowledged) return null
-      return h(Announcement, { t, complete, openSection, page, setPage, summary, acknowledged: false })
+      return h(Announcement, { t, complete, openSettings, page, setPage, summary, acknowledged: false })
     }
     exports.apply = apply
     exports.inject = inject
