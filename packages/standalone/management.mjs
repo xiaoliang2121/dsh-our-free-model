@@ -55,6 +55,20 @@ async function readBody(req, limit = MAX_BODY_BYTES) {
   return value
 }
 
+function validateClientIdentityField(key, value) {
+  if (typeof value !== 'string') throw fail(400, `${key} 必须是字符串`)
+  const trimmed = value.trim()
+  if (trimmed === '') return ''
+  if (key === 'clientChannel') {
+    if (!/^[a-z0-9-]{1,32}$/i.test(trimmed)) throw fail(400, 'clientChannel 必须是 1-32 位字母、数字或连字符')
+    return trimmed.toLowerCase()
+  } else {
+    if (!/^\d+\.\d+\.\d+$/.test(trimmed)) throw fail(400, 'clientVersion 必须是形如 2.2.5 的版本号')
+    if (Number(trimmed.split('.')[0]) < 2) throw fail(400, 'clientVersion 必须是 2.x 或更高')
+  }
+  return trimmed
+}
+
 function validateSettings(patch) {
   const visibility = validateModelVisibility(patch)
   const booleans = new Set(['enabled', 'exposeRegionModels', 'streamRecovery', 'standaloneProbe', 'standaloneLanEnabled'])
@@ -62,6 +76,10 @@ function validateSettings(patch) {
   const result = {}
   for (const [key, value] of Object.entries(patch)) {
     if (Object.hasOwn(visibility, key)) { result[key] = visibility[key]; continue }
+    if (key === 'clientChannel' || key === 'clientVersion') {
+      result[key] = validateClientIdentityField(key, value)
+      continue
+    }
     if (booleans.has(key)) {
       if (typeof value !== 'boolean') throw fail(400, `${key} 必须是布尔值`)
     } else if (Object.hasOwn(numbers, key)) {
@@ -84,6 +102,8 @@ export function managementSettings(value) {
     standaloneLanPort: value.standaloneLanPort ?? 0,
     probeIntervalMinutes: value.probeIntervalMinutes ?? 15,
     defaultMaxTokens: value.defaultMaxTokens ?? 32768,
+    clientChannel: typeof value.clientChannel === 'string' ? value.clientChannel : '',
+    clientVersion: typeof value.clientVersion === 'string' ? value.clientVersion : '',
   }
 }
 

@@ -18,6 +18,7 @@
 import crypto from 'node:crypto'
 import { classifyFailure } from './http.js'
 import { restoreToolName } from './upstream.js'
+import { translateToolArguments } from './tool-semantics.js'
 
 /** DeepSeek v4-family models occasionally leak internal DSML control markup
  * into the visible content at the reasoning→action boundary (observed live
@@ -88,10 +89,12 @@ function argumentsCutMidway(raw) {
 }
 
 class BlockSink {
-  constructor(yieldChunk, startIndex, checkpointLimit, onProgress) {
+  constructor(yieldChunk, startIndex, checkpointLimit, onProgress, toolSemantics) {
     this.emit = yieldChunk
     this.next = startIndex
     this.onProgress = typeof onProgress === 'function' ? onProgress : () => {}
+    /** DSH tool name -> official-argument translator; absent on legacy lanes. */
+    this.toolSemantics = toolSemantics instanceof Map ? toolSemantics : undefined
     /** @type {Map<string, {index:number, kind:string, text:string, id?:string, name?:string, args?:string}>} */
     this.open = new Map()
     this.usage = undefined
@@ -225,11 +228,19 @@ class BlockSink {
         // keeps forever, failing every later turn on every model. Downgrade the
         // turn exactly like the unparseable-arguments case above.
         if (typeof block.name !== 'string' || block.name === '') this.brokenToolCall = true
+        let args = block.args === '' ? '{}' : block.args
+        // The block-end is authoritative (the host's BlockAssembler prefers it
+        // over accumulated deltas), so this is the one event that can translate
+        // the complete argument object before the host validates it.
+        const inbound = this.toolSemantics !== undefined && typeof block.name === 'string'
+          ? this.toolSemantics.get(block.name)
+          : undefined
+        if (typeof inbound === 'function') args = translateToolArguments(args, inbound)
         this.emit({
           type: 'block-end', index: block.index,
           // A call that never learned its id or name still has to close with
           // strings: the same lossless-JSON snapshot rejects `undefined`.
-          block: { type: 'tool-call', id: block.id ?? '', name: block.name ?? '', arguments: block.args === '' ? '{}' : block.args },
+          block: { type: 'tool-call', id: block.id ?? '', name: block.name ?? '', arguments: args },
         })
       }
     }
@@ -506,7 +517,7 @@ export async function * readStream(lines, wire, renameMap, now = () => Date.now(
   const outbox = []
   const startIndex = Number.isSafeInteger(options?.startIndex) && options.startIndex >= 0 ? options.startIndex : 0
   const checkpointLimit = Number.isSafeInteger(options?.checkpointLimit) && options.checkpointLimit >= 0 ? options.checkpointLimit : 131072
-  const sink = new BlockSink(chunk => outbox.push(chunk), startIndex, checkpointLimit, options?.onProgress)
+  const sink = new BlockSink(chunk => outbox.push(chunk), startIndex, checkpointLimit, options?.onProgress, renameMap?.toolSemantics)
   const state = { usage: undefined, finish: undefined, sawFinish: false, sawUsage: false, sawToolCall: false, firstDeltaAt: undefined, sawReasoning: false, sawText: false, brokenToolCall: false }
   const snapshot = () => ({
     ...state,

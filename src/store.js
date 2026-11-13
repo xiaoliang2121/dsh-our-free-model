@@ -188,6 +188,11 @@ export const SETTINGS_INITIAL = {
    *  `direct` forces no proxy; `url` dials exactly this http(s) address.
    *  Independent of the free lane's `egress` outlet. */
   eacProxy: { mode: 'auto', url: '' },
+  /** Free-lane client identity in the v2 User-Agent. Empty means "follow the
+   *  built-in `CLIENT_UA`", so an upstream version bump is picked up without a
+   *  settings migration; a stored value freezes only the segment the user set. */
+  clientChannel: '',
+  clientVersion: '',
   /** Expose the absorbed channels' OpenAI gateway (the pack's loopback
    *  listener) to other machines under this plugin's own key. Off by default:
    *  a LAN listener is a door, and doors stay shut until asked for. */

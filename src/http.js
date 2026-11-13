@@ -372,9 +372,81 @@ async function readRemainder(head, signal) {
  * ⇒ 本车道的 UA 就是官方那一串，归属信息不再随行；归属仍保留在其余车道
  * （channel pack / EAC / Kilo 各自带自己的 UA）。`attributionUserAgent` 因此在本
  * 车道上不再影响线上字节，参数保留是为了不动宿主 API 与调用方签名。
+ *
+ * The channel/version may be overridden from settings. Only those two segments
+ * are user input; the prefix and the `/cli` suffix are fixed here, so a value
+ * can never smuggle in another product token or a header separator. An empty or
+ * malformed override falls back to {@link CLIENT_UA} instead of throwing: a bad
+ * header value would otherwise surface as a retryable transport error.
  */
+const CLIENT_UA_SHAPE = /^opencode\/([a-z0-9-]+)\/(\d+)\.(\d+)\.(\d+)\/cli$/i
+
+const CLIENT_UA_PARTS = (() => {
+  const match = CLIENT_UA_SHAPE.exec(CLIENT_UA)
+  return {
+    channel: match?.[1] ?? 'latest',
+    version: match === null ? '2.2.5' : `${match[2]}.${match[3]}.${match[4]}`,
+  }
+})()
+
+function normalizeChannel(value) {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return /^[a-z0-9-]{1,32}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined
+}
+
+function normalizeVersion(value) {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!/^\d+\.\d+\.\d+$/.test(trimmed)) return undefined
+  return Number(trimmed.split('.')[0]) >= 2 ? trimmed : undefined
+}
+
+/**
+ * Resolve the configured client identity into one v2 User-Agent.
+ *
+ * @param {object} [identity]
+ * @param {string} [identity.channel] - the `<channel>` segment; empty follows the built-in.
+ * @param {string} [identity.version] - the `<version>` segment; empty follows the built-in.
+ * @returns {string} a shape-valid `opencode/<channel>/<version>/cli` token.
+ */
+export function resolveClientUserAgent({ channel, version } = {}) {
+  const safeChannel = normalizeChannel(channel) ?? CLIENT_UA_PARTS.channel
+  const safeVersion = normalizeVersion(version) ?? CLIENT_UA_PARTS.version
+  return `opencode/${safeChannel}/${safeVersion}/cli`
+}
+
+/** Read the current override; defaults to the shipped constant. */
+let clientUserAgentSource = () => CLIENT_UA
+
+/**
+ * Install the settings-backed User-Agent source.
+ *
+ * The callback runs on every request, so a saved setting applies to the next
+ * hop without a reload. Passing anything other than a function restores the
+ * built-in value.
+ *
+ * @param {(() => string)} [read]
+ */
+export function setClientUserAgentSource(read) {
+  clientUserAgentSource = typeof read === 'function' ? read : () => CLIENT_UA
+}
+
+function configuredUserAgent() {
+  let value
+  try {
+    value = clientUserAgentSource()
+  } catch {
+    return CLIENT_UA
+  }
+  if (typeof value !== 'string') return CLIENT_UA
+  return CLIENT_UA_SHAPE.test(value) && Number(value.split('/')[2].split('.')[0]) >= 2
+    ? value
+    : CLIENT_UA
+}
+
 function userAgentWith(_attribution) {
-  return CLIENT_UA
+  return configuredUserAgent()
 }
 
 /**

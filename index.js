@@ -35,7 +35,7 @@ import { isEacEntry, isKiloEntry } from './src/catalog.js'
 import { STATE } from './src/probe.js'
 import { generateKey, rankLanAddresses, startForwardServer, startLanRelay } from './src/forward.js'
 import { chanGatewayCredential, chanGatewayEnabled, chanGatewayPort, startChanRelay } from './src/chan-relay.js'
-import { CODE, UpstreamError } from './src/http.js'
+import { CODE, UpstreamError, resolveClientUserAgent, setClientUserAgentSource } from './src/http.js'
 import { egressActive, egressFetch, outletLabel, readOutletSelection, startEgressRelay } from './src/egress.js'
 import { directFetch, lane, proxyAddress } from './src/eac.js'
 import { clearEacUser, readEacUser, writeEacUser } from './src/eac-user.js'
@@ -160,6 +160,15 @@ export function apply(ctx, config) {
   // the single source of truth. `lane.proxy` remains the higher-priority test
   // seam (the offline suites set it directly).
   lane.proxyConfig = () => settings.get().eacProxy
+
+  // The free lane's v2 User-Agent is read on every request for the same reason
+  // the EAC proxy is: saving the setting must apply to the next hop without a
+  // reload. Only the channel/version segments are configurable; the rest of the
+  // token stays fixed in src/http.js.
+  setClientUserAgentSource(() => resolveClientUserAgent({
+    channel: settings.get().clientChannel,
+    version: settings.get().clientVersion,
+  }))
 
   if (generation > 1) {
     settings.update({ reloadedAt: Date.now(), reloadCount: generation - 1 })
@@ -1664,12 +1673,55 @@ function sanitizeSettings(patch, current) {
   positive('probeIntervalMinutes', 15)
   positive('feedPollMinutes', 30)
   positive('defaultMaxTokens', 32768)
+  // Empty is meaningful here: it means "follow the built-in CLIENT_UA".
+  for (const key of ['clientChannel', 'clientVersion']) {
+    if (next[key] === undefined) continue
+    next[key] = typeof next[key] === 'string' ? next[key].trim() : ''
+    if (key === 'clientChannel') next[key] = next[key].toLowerCase()
+  }
   if (next.updateCheckHours !== undefined) {
     // Zero is a real answer here: it means "stop checking for updates".
     const hours = Number(next.updateCheckHours)
     next.updateCheckHours = Number.isFinite(hours) && hours >= 0 ? Math.trunc(hours) : (Number(current.updateCheckHours) || 6)
   }
   return next
+}
+
+/**
+ * Validate the optional client-identity overrides before anything is stored.
+ *
+ * The free lane's gate matches the v2 User-Agent by whole string, so a stray
+ * space, slash or a 1.x version turns every request into an opaque 429. Refuse
+ * the patch here, atomically, instead of persisting a value that only fails on
+ * the next signed call. An empty string is valid and means "follow the
+ * built-in default".
+ *
+ * @param {object} patch - the raw settings patch.
+ * @returns {string|undefined} a user-facing error, or undefined when valid.
+ */
+function validateClientIdentity(patch) {
+  const rules = {
+    clientChannel: {
+      pattern: /^[a-z0-9-]{1,32}$/i,
+      message: 'the client channel is 1-32 letters, digits or hyphens',
+    },
+    clientVersion: {
+      pattern: /^\d+\.\d+\.\d+$/,
+      message: 'the client version is a semver such as 2.2.5',
+    },
+  }
+  for (const [key, rule] of Object.entries(rules)) {
+    const value = patch[key]
+    if (value === undefined) continue
+    if (typeof value !== 'string') return rule.message
+    const trimmed = value.trim()
+    if (trimmed === '') continue
+    if (!rule.pattern.test(trimmed)) return rule.message
+    if (key === 'clientVersion' && Number(trimmed.split('.')[0]) < 2) {
+      return 'the client version must be 2.x or newer'
+    }
+  }
+  return undefined
 }
 
 /**
@@ -1992,8 +2044,10 @@ export function createApiRoutes(deps) {
       if (method === 'POST' && routePath === '/settings') {
         const patch = await readJson(req)
         const visibility = validateModelVisibility(patch)
+        const identityError = validateClientIdentity(patch)
+        if (identityError !== undefined) return send(400, { error: identityError })
         const current = deps.settings.get()
-        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch']), ...visibility }, current)
+        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch', 'clientChannel', 'clientVersion']), ...visibility }, current)
         if (next.autoReloadWatch === true && deps.update.status().hotReloadAvailable === false) next.autoReloadWatch = false
         if (patch.forward !== undefined) {
           const forward = { ...(current.forward ?? {}), ...pick(patch.forward, ['enabled', 'host', 'port']) }
@@ -2470,6 +2524,10 @@ function publicSettings(settings, forwardInfo, egressInfo) {
       mode: settings.eacProxy?.mode === 'direct' || settings.eacProxy?.mode === 'url' ? settings.eacProxy.mode : 'auto',
       url: typeof settings.eacProxy?.url === 'string' ? settings.eacProxy.url : '',
     },
+    // Empty means "follow the built-in CLIENT_UA"; the page shows the
+    // placeholder from the shipped default, not a frozen copy.
+    clientChannel: typeof settings.clientChannel === 'string' ? settings.clientChannel : '',
+    clientVersion: typeof settings.clientVersion === 'string' ? settings.clientVersion : '',
   }
 }
 

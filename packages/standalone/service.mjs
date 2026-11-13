@@ -4,6 +4,7 @@ import path from 'node:path'
 import net from 'node:net'
 import crypto from 'node:crypto'
 import { createModelRuntime, createRuntimeStores } from '../../src/core/runtime.js'
+import { resolveClientUserAgent, setClientUserAgentSource } from '../../src/http.js'
 import { generateKey, rankLanAddresses, startForwardServer, startLanRelay } from '../../src/forward.js'
 import { isLoopbackHost } from '../../src/trust.js'
 import { createManagement } from './management.mjs'
@@ -233,6 +234,13 @@ export async function startStandalone({
   try {
     stores = createRuntimeStores({ dataDir, logger })
     const { settings } = stores
+    // The standalone product shares the free lane's request code, so it reads
+    // the same client-identity setting instead of silently sending the built-in
+    // default while the plugin's card shows something else.
+    setClientUserAgentSource(() => resolveClientUserAgent({
+      channel: settings.get().clientChannel,
+      version: settings.get().clientVersion,
+    }))
     const savedPort = settings.get().standalonePort
     const requestedPort = port ?? (Number.isInteger(savedPort) && savedPort >= 0 && savedPort <= 65535 ? savedPort : 18900)
     const existingKey = settings.get().forwardKey

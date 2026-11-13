@@ -119,6 +119,27 @@ vendored 的 `vendor/channel-pack/src/opencode*.ts`）保持同一套形状。
 （文件对照、七条有意偏差、升级手册见 `src/o2a/SYNC.md`）。`src/upstream.js`
 保留为适配层，公开导出不变。
 
+## 2026-11-13：默认整形改为「语义映射（保守档）」
+
+本节的结论**取代**下面「本次的线上形状（v1.4.6）」作为**默认路径**；v1.4.6 的「全部客户端工具改名 + 追加官方 13 工具」仍保留为 forward 监听器的 legacy 路径（applyFingerprint(body, style, { toolSemantics: false })），因为它的调用方是任意 OpenAI/Anthropic 客户端，不是本宿主。
+
+宿主路径（src/tool-semantics.js）：
+
+| 项目 | 现在的行为 |
+| --- | --- |
+| 重叠工具 | 换成官方 2.2.x 的 name / description / schema：read、edit、write、glob、grep、skill、web_search→websearch、web_fetch→webfetch、ask_user_question→question、todo_write→todowrite、bash→shell |
+| DSH 独有工具 | 仍改名为 clint_<sha256[:12]>，回包还原；黑名单名字因此仍不会上线 |
+| 官方工具集 | 不再追加 13 个；只声明有真实 DSH 执行者的工具 |
+| 闸门 | 始终有 read + shell：宿主有 read/bash 时用映射后的官方声明；缺任一时补官方声明并在系统提示里标成占位 |
+| 占位提示 | 只对「宿主没有对应执行者、但闸门要求」的 read/shell 追加；映射到的官方工具不再被说成占位 |
+| 历史 | 不重写（闸门只读 tools，不读历史；只改名字不改参数会留下两套词汇） |
+| 响应侧 | block-end 同时还原名字与完整参数；tool-call-delta 只还原名字；参数 JSON 解析失败原样透传 |
+
+参数翻译与两个插件的公共表见父仓 docs/data-formats.md「免费车道的工具语义映射（2026-11-13）」。保守档边界：read_image 不合并到 read（入站无法可靠区分，PDF 无执行者）、subagent 保留 DSH schema、patch/execute 不声明、历史不重写。
+
+为什么改：v1.4.6 的全量改名会让模型看到不透明工具名、每请求多约 5.4k token，并且 DSH 独有工具无法按官方词汇表达；语义映射只替换模型真正能执行的重叠工具，既保留闸门形态，也让模型看到官方词汇。真机 A/B（闸门到底读 read+shell 还是 bash+read、是否逐字校验 schema）待免费额度恢复后执行（父仓 KI-042）。
+
+回归：scripts/fingerprint-test.mjs（语义路径 + legacy 路径 + 幂等）、scripts/tool-semantics-wire-test.mjs（真实 adapter 出站/入站）、scripts/wire-tool-alias-test.mjs、scripts/opencode-parity-test.mjs、scripts/free-lane-wire-test.mjs。
 ## 本次的线上形状（v1.4.6）
 
 | 项目 | 之前（2026-10-28 形状） | 现在（v1.4.6 移植） |
@@ -151,7 +172,7 @@ Anthropic 线新增 `anthropic-beta: interleaved-thinking-2025-05-14` 头。保�
   为前提；跨客户端的对照一律无效。判定只能用本车道自己的客户端（插件 =
   Node/Bun）或参考网关本体。
 
-回归测试：`scripts/fingerprint-test.mjs`（不透明改名 + 13 工具集 + 幂等）、
+回归测试：`scripts/fingerprint-test.mjs`（语义映射 + legacy 路径 + 幂等）、`scripts/tool-semantics-wire-test.mjs`（真实 adapter 出站词汇 + 入站参数）、
 `scripts/free-lane-wire-test.mjs`（族路径、40-hex project id、UA、四会话头、
 无 accept 头）、`scripts/opencode-parity-test.mjs`（lane 与 channel pack 的重叠契约）、
 `scripts/wire-tool-alias-test.mjs`（改名 → 流式还原 → 宿主分发）、

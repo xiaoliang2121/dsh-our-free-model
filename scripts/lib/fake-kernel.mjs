@@ -67,7 +67,7 @@ export async function stubUpstream({ listing = [], answer = () => ({ body: chatF
       }
       let body = {}
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { /* a malformed body is a scripted failure */ }
-      requests.push({ path: url, body })
+      requests.push({ path: url, body, headers: req.headers })
       const verdict = api.refuseAll ? { status: 400, body: JSON.stringify({ error: { message: 'Model is unavailable.' } }) } : answer(body.model, body, api)
       if (verdict.socket === true) {
         // No answer at all: the transport dies before a status line. The probe

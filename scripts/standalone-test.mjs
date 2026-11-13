@@ -171,6 +171,13 @@ try {
       } finally { process.kill = nativeKill }
     })
   }
+  // The standalone product shares the free lane's request code, so it must read
+  // the same client-identity setting the plugin's settings page writes.
+  fs.mkdirSync(dataDir, { recursive: true })
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({
+    clientChannel: 'beta',
+    clientVersion: '2.4.0',
+  }), { mode: 0o600 })
   await check('the listener starts while its upstream listing is held', async () => {
     holdListing = new Promise(resolve => { unhold = resolve })
     listingStarted = new Promise(resolve => { signalListingStarted = resolve })
@@ -259,11 +266,11 @@ try {
     assert.equal(kilo.status, 200)
     assert.equal((await kilo.json()).choices[0].message.content, 'kilo-ok')
   })
-  await check('独立服务的目录、探测和推理都带 v2 客户端指纹', () => {
+  await check('独立服务的目录、探测和推理都带配置的 v2 客户端指纹', () => {
     assert.ok(anonymousRequests.some(req => req.method === 'GET'))
     assert.ok(anonymousRequests.filter(req => req.method === 'POST').length >= 4)
     for (const req of anonymousRequests) {
-      assert.equal(req.headers['user-agent'], 'opencode/latest/2.1.1/cli')
+      assert.equal(req.headers['user-agent'], 'opencode/beta/2.4.0/cli')
     }
   })
   await check('unknown models are refused before spending an upstream call', async () => {

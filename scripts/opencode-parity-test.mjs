@@ -69,13 +69,13 @@ try {
   const packBody = messages.buildOpencodePayloadWithToolMap({ model: 'big-pickle', messages: [{ role: 'user', content: 'hi' }] }).payload
   const packTools = chatShape(packBody.tools)
 
-  console.log('=== 1. the gate names agree, and the lane ships the full official set ===')
+  console.log('=== 1. the gate names agree, and both sides declare the pair ===')
   check('gate names', [...messages.FREE_LANE_GATE_TOOLS], [...up.FINGERPRINT_TOOLS])
   check('the pack injects both', packTools.map(tool => tool.name), ['read', 'shell'])
-  // The lane now mirrors the reference gateway (o2a): the full 13-tool official
-  // set, of which the pack's two are the gate subset.
-  check('the lane declares the full official set', V2_OFFICIAL_TOOL_ORDER.every(name => laneTools.some(tool => tool.name === name)), true)
-  check('the lane declares the pack’s gate names', ['read', 'shell'].every(name => laneTools.some(tool => tool.name === name)), true)
+  // The semantic path declares the gate pair plus the tools the host can run;
+  // the pack's two are the same gate subset.
+  check('the lane declares the gate pair', ['read', 'shell'].every(name => laneTools.some(tool => tool.name === name)), true)
+  check('the lane does not spend tokens on the other official tools', V2_OFFICIAL_TOOL_ORDER.filter(name => name !== 'read' && name !== 'shell').some(name => laneTools.some(tool => tool.name === name)), false)
 
   console.log('\n=== 2. the injected definitions are identical, verbatim ===')
   for (const name of ['read', 'shell']) {
@@ -95,7 +95,7 @@ try {
 
   console.log('\n=== 3. the User-Agent is the canonical v2 shape on both sides ===')
   // Both copies must be a bare `opencode/latest/<2.x>/cli` token. The lane takes
-  // its version from the o2a port (currently 2.1.1); the pack pins its own —
+  // its version from the o2a port (currently 2.2.5); the pack pins its own —
   // the two may drift in version, never in shape.
   const v2Shape = token => /^opencode\/latest\/2\.\d+\.\d+\/cli$/.test(token)
   check('the lane sends a v2 token', v2Shape(up.CLIENT_UA), true)
@@ -122,15 +122,16 @@ try {
   check('glm-5.3-flash-free is free and reachable', [free.has('glm-5.3-flash-free'), free.get('glm-5.3-flash-free')?.isFree], [true, true])
   check('both carry a positive context window', [free.get('deepseek-v4.1-flash-free').contextWindow > 0, free.get('glm-5.3-flash-free').contextWindow > 0], [true, true])
 
-  console.log('\n=== 6. a caller tool on a gate name moves aside on both sides ===')
-  // The lane renames every client tool opaquely (the o2a port); the pack keeps
-  // the read_client alias it verified live. Both must restore the caller's name.
+  console.log('\n=== 6. a caller tool on a gate name is replaced on the lane and aliased by the pack ===')
+  // The semantic lane replaces the caller's read with the official declaration
+  // (one function name, official schema); the pack keeps the read_client alias
+  // it verified live. Both keep exactly one official read.
   const conflict = { type: 'function', function: { name: 'read', description: 'the caller read', parameters: { type: 'object', properties: { x: { type: 'string' } } } } }
   const laneConflict = { tools: [conflict] }
   const laneMap = up.applyFingerprint(laneConflict, false)
-  const laneWire = clientToolWireName('read')
-  check('the lane renames it opaquely', laneConflict.tools.some(tool => tool.function.name === laneWire), true)
-  check('the lane restores it', up.restoreToolName(laneWire, laneMap), 'read')
+  check('the lane keeps one read', laneConflict.tools.filter(tool => tool.function?.name === 'read').length, 1)
+  check('…and it is the official schema', laneConflict.tools.find(tool => tool.function?.name === 'read').function.parameters.required, ['path'])
+  check('the name still restores to read', up.restoreToolName('read', laneMap), 'read')
   const packConflict = messages.buildOpencodePayloadWithToolMap({ model: 'big-pickle', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 'read', description: 'the caller read', parameters: { type: 'object', properties: { x: { type: 'string' } } } }] })
   check('the pack aliases it', packConflict.toolNameMap.get('read_client'), 'read')
   check('the pack keeps one official read', packConflict.payload.tools.filter(tool => tool.function?.name === 'read').length, 1)
@@ -139,7 +140,7 @@ try {
   // list: the model reads its own earlier `read` call as a call to the official
   // tool of that name otherwise, and the two definitions disagree. Both sides
   // must rewrite the same rows — this is the drift the suite exists to catch.
-  console.log('\n=== 6b. an aliased tool is renamed in the history on both sides ===')
+  console.log('\n=== 6b. history: the pack rewrites it, the semantic lane leaves it alone ===')
   const history = [
     { role: 'user', content: 'do it' },
     { role: 'assistant', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
@@ -148,11 +149,14 @@ try {
   const laneHistory = { tools: [conflict], messages: JSON.parse(JSON.stringify(history)) }
   up.applyFingerprint(laneHistory, false)
   const laneName = laneHistory.messages.find(message => Array.isArray(message.tool_calls))?.tool_calls?.[0]?.function?.name
-  check('the lane rewrites the prior call', laneName, clientToolWireName('read'))
+  // The gate ignores historical tool names (measured 2026-11-04), and rewriting
+  // only the name would leave the arguments in the other vocabulary, so the
+  // semantic path deliberately does not touch history.
+  check('the lane leaves the prior call alone', laneName, 'read')
   const packHistory = messages.buildOpencodePayloadWithToolMap({ model: 'big-pickle', messages: JSON.parse(JSON.stringify(history)), tools: [{ name: 'read', description: 'the caller read', parameters: { type: 'object', properties: { x: { type: 'string' } } } }] })
   const packName = packHistory.payload.messages.find(message => Array.isArray(message.tool_calls))?.tool_calls?.[0]?.function?.name
   check('the pack rewrites the prior call', packName, 'read_client')
-  check('both sides rewrite the prior call away from the gate name', [packName === 'read_client', laneName === clientToolWireName('read')], [true, true])
+  check('each side keeps its stated history policy', [packName === 'read_client', laneName === 'read'], [true, true])
 
   console.log('\n=== 7. neither side sends tool_choice none ===')
   const laneNone = { tools: [], tool_choice: 'none' }

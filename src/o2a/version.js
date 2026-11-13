@@ -25,7 +25,7 @@ export const O2A_REFERENCE = 'https://github.com/jasonxu114514/opencode2api'
  * The v2 gate fingerprints `opencode/latest/<version>/cli`; the upstream project
  * keeps this current with the official client.
  */
-export const V2_CLIENT_VERSION = '2.1.1'
+export const V2_CLIENT_VERSION = '2.2.5'
 
 /** The v2 User-Agent (`httpx.V2UserAgent`). Must be sent alone, unmodified. */
 export const CLIENT_UA = `opencode/latest/${V2_CLIENT_VERSION}/cli`

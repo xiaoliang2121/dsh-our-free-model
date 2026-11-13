@@ -70,6 +70,9 @@ export function createForwardCompletion({ adapter, state, signal }) {
       ...toolChoice === undefined ? {} : { toolChoice },
       sessionId: `forward:${String(openAi.user ?? openAi.conversation ?? request.sessionId ?? 'shared')}`,
       signal: request.signal && signal ? AbortSignal.any([request.signal, signal]) : request.signal ?? signal,
+      // Forward callers are arbitrary OpenAI/Anthropic clients, not this host:
+      // their tool names must not be translated into DSH argument keys.
+      toolSemantics: false,
     }
     for await (const chunk of adapter.stream(options, entry, snapshot)) {
       handler(chunk)

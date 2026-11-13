@@ -498,7 +498,11 @@ export class FreeModelAdapter {
       // caller's tools exactly as declared, so the fingerprint pass is free-lane
       // only. The aggregate lane is somebody else's gateway entirely — renaming
       // its tools to this lane's gate placeholders would break the caller's calls.
-      const renameMap = sealed || kilo || aggregate ? new Map() : applyFingerprint(payload, wire === 'messages' ? 'claude' : style === 'flat')
+      const renameMap = sealed || kilo || aggregate
+        ? new Map()
+        : applyFingerprint(payload, wire === 'messages' ? 'claude' : style === 'flat', {
+          toolSemantics: options.toolSemantics !== false,
+        })
       const controller = new AbortController()
       const onAbort = () => controller.abort(options.signal?.reason)
       options.signal?.addEventListener('abort', onAbort, { once: true })

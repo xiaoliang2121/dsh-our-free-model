@@ -93,6 +93,7 @@
     "src/vault-data.js",
     "src/vault.js",
     "src/token-saver.js",
+    "src/tool-semantics.js",
     "src/engine-parts",
     "src/core.js",
     "src/providers",

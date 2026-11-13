@@ -57,6 +57,15 @@
  * the Responses `auto` default, block identity across prompt injection, and
  * the idempotence pass for already-shaped bodies.
  *
+ * **2026-11-13: the default shaping is now semantic.** The reference port's
+ * "rename every client tool + append all 13 officials" remains as the
+ * {@link applyLegacyFingerprint} path for the forward listener (whose callers
+ * are arbitrary OpenAI/Anthropic clients). The host path uses
+ * {@link applyFingerprint}: overlapping tools are declared with the official
+ * vocabulary and mapped back, DSH-only tools keep the opaque `clint_` name,
+ * and only gate-only declarations get the placeholder note. See
+ * `src/tool-semantics.js`.
+ *
  * @module src/upstream.js
  */
 
@@ -87,6 +96,7 @@ import {
   renamableToolName,
   sessionPhaseMs,
 } from './o2a.js'
+import { rewriteToolChoice, shapeOfficialToolset } from './tool-semantics.js'
 
 /**
  * Overridable so the selftest can point the adapter at a dead port and exercise
@@ -107,9 +117,10 @@ const MAX_TOOL_NAME_LEN = 128
 const BASE62 = BASE62_ALPHABET
 
 /**
- * The names the v2 gate validates verbatim. The full official set now ships
- * alongside them (see `src/o2a/official-tools.js`); these two are the ones the
- * gate's tool check is known to read.
+ * The names the v2 gate validates verbatim.
+ *
+ * The semantic path always declares both; the legacy path (forward listener)
+ * also appends the full official set around them.
  */
 export const FINGERPRINT_TOOLS = ['read', 'shell']
 
@@ -448,8 +459,7 @@ export function ensureFreeLaneEnvironment(body, style, environment = {}) {
  * @returns {ToolRenameMap} sent name -> caller's name（响应侧还原用；带
  *   {@link ToolRenameMap.resolve} 的折叠还原）
  */
-export function applyFingerprint(body, style) {
-  const shape = shapeOf(style)
+function applyLegacyFingerprint(body, shape) {
   if (!body || typeof body !== 'object') return new ToolRenameMap()
 
   // 1. Official system prompt (the reference injects before shaping tools).
@@ -485,6 +495,51 @@ export function applyFingerprint(body, style) {
 }
 
 /** Restore the caller's tool spelling in a streaming delta or a final payload. */
+/**
+ * Shape one request body for the free lane.
+ *
+ * The default path is the semantic one: overlapping tools are declared with the
+ * official OpenCode vocabulary and mapped back on the response side, while DSH
+ * tools without an official counterpart keep the opaque `clint_` name. The
+ * legacy path (rename everything + append all 13 official tools) is still used
+ * by the forward listener, whose callers are arbitrary OpenAI/Anthropic
+ * clients rather than this host; translating their tool names would be wrong.
+ *
+ * @param body - request body, mutated in place.
+ * @param style - true for Responses, false for Chat, 'claude' for Messages.
+ * @param options - `{ toolSemantics }`; false selects the legacy path.
+ * @returns a ToolRenameMap (with an optional `toolSemantics` argument map).
+ */
+export function applyFingerprint(body, style, options = {}) {
+  const shape = shapeOf(style)
+  if (!body || typeof body !== 'object') return new ToolRenameMap()
+  if (options.toolSemantics === false) return applyLegacyFingerprint(body, shape)
+
+  // 1. Official system prompt (the reference injects before shaping tools).
+  injectOfficialPrompt(body, shape)
+
+  // 2. Replace overlapping declarations and rename the rest.
+  const plan = shapeOfficialToolset(body, shape)
+
+  // 3. Only gate-only declarations need the placeholder note.
+  if (plan.injected.length > 0) noteInjectedTools(body, shape, plan.injected)
+
+  // 4. Never ship tool_choice none; default the Responses wire to auto.
+  rewriteToolChoice(body, shape, plan.renames)
+  if (body.tool_choice === 'none'
+    || (body.tool_choice !== null && typeof body.tool_choice === 'object' && body.tool_choice.type === 'none')) {
+    delete body.tool_choice
+  }
+  if (shape === 'flat' && !body.tool_choice) body.tool_choice = 'auto'
+
+  // 5. The chat body's own constants.
+  ensureChatUsage(body, shape)
+  ensureV2CompletionLimit(body, shape)
+
+  plan.renames.toolSemantics = plan.semantics
+  return plan.renames
+}
+
 export function restoreToolName(name, map) {
   if (!map) return name
   if (typeof map.resolve === 'function') return map.resolve(name)

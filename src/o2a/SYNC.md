@@ -14,7 +14,7 @@
 |---|---|---|
 | `identity/request.go` | `identity.js` | 会话铸造：`bootNonce`（进程盐）、`CanonicalSessionID`（慢钟时间戳 + 降序编码）、`isOfficialSessionID`、`RandomProjectID`、base62。JS 侧新增 `sessionTimestampMs`（把会话内嵌时间戳解出来，供持久层做时效重铸）。 |
 | `protocol/tools.go` | `tool-renames.js` | `clint_<sha256[:12]>` 不透明改名、`ToolRenames`（正反映射 + 大小写/分隔符折叠解析 `Resolve`）、冲突 `_2` 后缀。 |
-| `gateway/toolshape.go` | `toolshape.js` | `renameAndCompleteTools`（全部客户工具改名 + 追加官方 13 工具集）、`rewriteToolReferences`（tool_choice / 历史 tool_calls / tool_use / input 调用行 / function_call / allowed_tools 同步改名）、legacy `functions` 转换。 |
+| `gateway/toolshape.go` | `toolshape.js` | `renameAndCompleteTools`（全部客户工具改名 + 追加官方 13 工具集）、`rewriteToolReferences`（tool_choice / 历史 tool_calls / tool_use / input 调用行 / function_call / allowed_tools 同步改名）、legacy `functions` 转换。**插件的默认宿主路径已改用 `../tool-semantics.js`；此文件只服务 legacy/forward（`toolSemantics:false`）。** |
 | `gateway/toolshape.go`（资产） | `official-tools.js` + `assets/opencode_tools.json` | 官方 2.x 工具集（捕获自官方 CLI，逐字）、`strict:false`（chat 线）、Windows 主机 shell 描述改写、`renamableToolName`（Responses/Messages 内建工具跳过）。 |
 | `gateway/opencode_prompt.go`（资产） | `official-prompt.js` + `assets/opencode_prompt_v2.txt` | 官方 CLI 系统提示（base + `<env>` + skills）、marker 判重、三条线注入。 |
 | `gateway/upstream.go`（body 部分） | `gateway-body.js` | `ensureAnonymousChatUsage`（`stream_options.include_usage`）、`ensureV2CompletionLimit`（`max_completion_tokens: 32000`）。 |
@@ -30,9 +30,10 @@
 
 移植不是逐字节照抄；以下偏差是插件形态决定的，同步上游时**保留**：
 
-1. **占位提示**：注入的官方工具集对本插件宿主是不可执行的占位工具，注入后追加
-   「placeholders in this session」提示词压住模型调用（参考实现的下游是真
-   CLI，会真的执行这些工具，所以不发这条）。
+1. **占位提示（仅 legacy 路径）**：legacy 路径注入的官方工具集对宿主不可执行，
+   追加「placeholders in this session」压住模型调用（参考实现的下游是真 CLI，
+   会真的执行这些工具，所以不发这条）。默认语义路径只在缺 `read`/`shell` 时补
+   gate-only 声明，并且只对这两个名字追加同一提示。
 2. **`tool_choice: 'none'` 删除**：v2 门禁见它即 403（2026-10-16 实测）。参考
    实现从不主动下发，所以不需要删；插件的调用方（续写路径等）可能留下它，
    适配层兜底清除。
@@ -50,6 +51,12 @@
    接受窗口（±400 天）的旧 id 重铸，而不是永久重放。
 7. **响应端 copy-on-write**：参考实现原地改调用方对象；插件的工具对象/历史行
    与宿主 harness 共享，改名一律换浅拷贝。
+8. **默认整形是语义映射，不是本移植的全量改名（2026-11-13）**：宿主路径由
+   `src/tool-semantics.js` 把有真实 DSH 执行者的重叠工具换成官方 name/schema，
+   DSH 独有工具仍用 `clint_`，入站参数在 `block-end` 译回；`patch`/`execute`
+   不声明，历史不重写。本移植的「全量改名 + 13 工具」只在 
+   `applyFingerprint(..., { toolSemantics: false })` 的 forward 路径保留。同步上游
+   时不要把这个默认路径改回去；改映射只动 `src/tool-semantics.js`，不要塞进 `src/o2a/`。
 
 ## 3. 升级流程（上游发新版时）
 

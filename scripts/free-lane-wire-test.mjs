@@ -50,8 +50,7 @@ server.unref()
 process.env.OUR_FREE_MODEL_BASE = `http://127.0.0.1:${server.address().port}`
 
 const up = await import('../src/upstream.js')
-const { clientToolWireName } = await import('../src/o2a/tool-renames.js')
-const { postStreamed, getJson, readSse, CODE } = await import('../src/http.js')
+const { postStreamed, getJson, readSse, CODE, resolveClientUserAgent, setClientUserAgentSource } = await import('../src/http.js')
 
 let failures = 0
 const check = (name, actual, expected) => {
@@ -137,15 +136,15 @@ console.log('\n=== 4. the v2 tool gate: read + shell, official definitions, no t
   up.applyFingerprint(claude, 'claude')
   check('Messages shape uses input_schema', declared(claude, 'read').input_schema.required, ['path'])
 
-  // A caller tool that reuses a gate name with another definition moves aside,
-  // and the response side still restores the caller's own spelling.
+  // A caller tool that reuses a gate name with another definition is replaced
+  // by the official declaration; there is exactly one read and it is the one the
+  // model sees. No opaque copy is emitted.
   const caller = { tools: [{ type: 'function', function: { name: 'read', description: 'the caller read', parameters: { type: 'object', properties: {} } } }] }
   const map = up.applyFingerprint(caller, false)
   check('only one declaration carries the gate name', caller.tools.filter(tool => tool.function.name === 'read').length, 1)
   check('…and it is the official definition', declared(caller, 'read').function.parameters.required, ['path'])
-  const callerWire = clientToolWireName('read')
-  check('the caller declaration survived under its opaque wire name', caller.tools.find(tool => tool.function.name === callerWire).function.description, 'the caller read')
-  check('…and the wire name restores the caller name', up.restoreToolName(callerWire, map), 'read')
+  check('the caller declaration is not emitted as an opaque duplicate', caller.tools.length, 2)
+  check('the read name still restores', up.restoreToolName('read', map), 'read')
 }
 
 console.log('\n=== 5. the User-Agent is the canonical v2 token, whatever the host attributes ===')
@@ -194,6 +193,34 @@ console.log('\n=== 6. 目录请求与推理请求使用同一串 v2 UA ===')
   const unrelated = 'other-client/3.0 (+https://example.com/our-free-model-standalone)'
   await getJson('/inference/v1/models', { attributionUserAgent: unrelated })
   check('任何归属串都不再改变线上 UA', seen.at(-1).headers['user-agent'], up.CLIENT_UA)
+}
+
+console.log('\n=== 6b. 配置的 channel/version 同时驱动目录与推理请求 ===')
+{
+  setClientUserAgentSource(() => resolveClientUserAgent({ channel: 'beta', version: '2.3.1' }))
+  await getJson('/inference/v1/models', { attributionUserAgent: 'anything' })
+  check('目录请求采用配置的 channel/version', seen.at(-1).headers['user-agent'], 'opencode/beta/2.3.1/cli')
+  await postStreamed({
+    path: up.endpointFor('cat-jam-free'),
+    body: { model: 'cat-jam-free', messages: [{ role: 'user', content: 'ping' }], stream: true },
+    session: up.sessionForConversation('wire:ua-override'),
+    onData: () => {},
+    timeoutMs: 5000,
+  })
+  check('推理请求采用同一串', seen.at(-1).headers['user-agent'], 'opencode/beta/2.3.1/cli')
+
+  // A hand-written or stale value must never reach the wire: undici would throw
+  // on a bad header and the lane would report a retryable transport failure.
+  setClientUserAgentSource(() => 'not-a-v2-token')
+  await getJson('/inference/v1/models', {})
+  check('非法覆盖回落内置 UA', seen.at(-1).headers['user-agent'], up.CLIENT_UA)
+  check('非法版本只回落版本段', resolveClientUserAgent({ channel: 'beta', version: '1.0.0' }), 'opencode/beta/2.2.5/cli')
+  check('含空格的渠道只回落渠道段', resolveClientUserAgent({ channel: 'be ta', version: '2.3.1' }), 'opencode/latest/2.3.1/cli')
+  check('空值跟随内置', resolveClientUserAgent({ channel: '', version: '' }), up.CLIENT_UA)
+
+  setClientUserAgentSource()
+  await getJson('/inference/v1/models', {})
+  check('恢复默认源后仍是内置 UA', seen.at(-1).headers['user-agent'], up.CLIENT_UA)
 }
 
 console.log('\n=== 7. an empty 5xx body names the hop instead of saying "HTTP 502" (issue #549) ===')

@@ -35,7 +35,9 @@ for (const style of [false, true, 'claude']) {
   // the two names the 2026-10-30 probe pinned — everything is renamed.
   assert.equal(restoreToolName(WIRE.read_image, map), 'read_image')
   const definitions = body.tools.map(t => t.function ?? t)
-  assert.equal(definitions.length, names.length + V2_OFFICIAL_TOOL_ORDER.length) // renamed callers + full official set
+  // Renamed callers + the two gate declarations. The semantic path does not
+  // append the other eleven official tools, so this is 5 + 2, not 5 + 13.
+  assert.equal(definitions.length, names.length + 2)
   assert.equal(new Set(definitions.map(t => t.name)).size, definitions.length)
   assert.ok(!definitions.some(t => t.name === 'subagent_fork' || t.name === 'working_directory'))
   for (const [wire, source] of [[WIRE.subagent_fork, 'subagent_fork'], [WIRE.working_directory, 'working_directory']]) {
@@ -45,7 +47,10 @@ for (const style of [false, true, 'claude']) {
   }
   assert.deepEqual(tools, original, 'caller definitions must not be mutated')
   if (style === true) {
-    assert.equal(body.input[0].name, WIRE.subagent_fork)
+    // History is intentionally not rewritten: the gate ignores historical
+    // tool names, and rewriting only the name would leave the arguments in the
+    // other vocabulary. The live declaration and tool_choice are what matter.
+    assert.equal(body.input[0].name, 'subagent_fork')
     assert.equal(body.input[1].call_id, 'call1')
     assert.equal(body.input[1].output, 'result')
     assert.equal(body.tool_choice.name, WIRE.subagent_fork)
@@ -53,7 +58,7 @@ for (const style of [false, true, 'claude']) {
     assert.ok(body.instructions.startsWith('You are opencode, an interactive CLI tool'))
     assert.ok(body.instructions.includes('Preserve caller instructions'))
   } else if (style === 'claude') {
-    assert.equal(body.messages[0].content[0].name, WIRE.working_directory)
+    assert.equal(body.messages[0].content[0].name, 'working_directory')
     assert.equal(body.messages[1].content[0].tool_use_id, 'call1')
     assert.equal(body.tool_choice.name, WIRE.working_directory)
     // The official prompt is prepended as its own text block; the caller's block follows.
@@ -61,7 +66,7 @@ for (const style of [false, true, 'claude']) {
     assert.equal(body.system[1].text, 'Preserve caller instructions')
   } else {
     const history = body.messages.find(m => m.tool_calls)
-    assert.equal(history.tool_calls[0].function.name, WIRE.working_directory)
+    assert.equal(history.tool_calls[0].function.name, 'working_directory')
     assert.deepEqual(history.content, [])
     assert.equal(body.messages.at(-1).tool_call_id, 'call1')
     assert.equal(body.messages.at(-1).content, 'result')

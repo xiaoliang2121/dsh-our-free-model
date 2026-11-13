@@ -643,7 +643,7 @@ check('the adapter conversion keeps every caller tool', () => {
 
 check('a non-empty caller list is renamed opaquely and gains the official set', () => {
   const body = { tools: toToolDefs([normalizeTool(openAiTool('pwsh')), normalizeTool(openAiTool('glob'))], 'chat') }
-  applyFingerprint(body, false)
+  applyFingerprint(body, false, { toolSemantics: false })
   // The reference shaping (o2a) renames every client tool to an opaque wire
   // name and appends the full official set — the vocabulary gate refuses a
   // body that still reads as another client's session.
@@ -658,7 +658,7 @@ check('a non-empty caller list is renamed opaquely and gains the official set', 
 
 check('an empty caller list still gets the official set, and no tool_choice', () => {
   const body = { tools: [] }
-  applyFingerprint(body, false)
+  applyFingerprint(body, false, { toolSemantics: false })
   assert.deepEqual(body.tools.map(tool => tool.function.name), [...V2_OFFICIAL_TOOL_ORDER])
   // v1 forced `tool_choice: 'none'` here; v2 answers that value with 403.
   assert.equal(body.tool_choice, undefined)
@@ -666,7 +666,7 @@ check('an empty caller list still gets the official set, and no tool_choice', ()
 
 await checkAsync('a caller tool reusing a gate name is mapped back to the caller name', async () => {
   const body = { tools: toToolDefs([normalizeTool(openAiTool('read'))], 'chat') }
-  const map = applyFingerprint(body, false)
+  const map = applyFingerprint(body, false, { toolSemantics: false })
   assert.equal(map.get(clientToolWireName('read')), 'read')
 })
 

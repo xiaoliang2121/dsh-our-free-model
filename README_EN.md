@@ -54,6 +54,7 @@
 - **Nothing to configure** — install, restart, pick a model. No account, no key, no quota dashboard to register on.
 - **The upstreams are named** — the free lane is OpenCode's Zen gateway at `https://opencode.ai`, and the Kilo channel is Kilo AI's public gateway at `https://kilo.ai`; both are dialled directly, with no third party relaying your traffic. Who serves your requests, and where your data goes, is spelled out in [Where the models come from](#where-the-models-come-from) and the [Disclaimer](#disclaimer).
 - **A roster that tracks upstream** — model set, context length and capabilities are re-fetched on every refresh rather than frozen into the plugin.
+- **Configurable client identity and tool vocabulary** — the plugin settings page edits the free lane's UA channel/version (blank follows the built-in `opencode/latest/2.2.5/cli`); overlapping tools are declared with the official OpenCode 2.2.x vocabulary and their arguments are translated back to DSH, while DSH-only tools keep their own names and stay executable.
 - **The picker offers only what actually answers** — a model the upstream listing names but the gateway refuses to route outright (`Model is unavailable`, a 404 for that id) leaves the dropdown and stays visible in the settings page with its refusal recorded. Everything that is *not* a statement about the model keeps its model reachable: a 5xx from the gateway, a 429 quota window, a timeout or a dropped connection. Region-gated ones move to their own `region-limited` group. If a whole round refuses everything, nothing is hidden: the picker never goes empty.
 - **Announcement center with live push** — the repository owner edits one JSON file and pushes; every installation receives it within one poll cycle. Bodies are HTML rendered through a strict allowlist; `urgent` items open a full-screen modal; optional OS-level notifications.
 - **In-app upgrades** — one click in the settings page: download → SHA-256 verification → backup → atomic replace → read-back verification → hot reload, with automatic rollback if any step fails.
@@ -257,6 +258,19 @@ the visible answer, which is why a model that cannot switch thinking off gets
 the whole ladder doubled (the model cards in `Plugins → Our Free Model` print the
 number each rung will really send). If answers keep getting cut off, move to
 `Deep`, or raise the per-call output ceiling in the settings.
+
+**Client identity.** The plugin settings page edits the free lane's UA
+`opencode/<channel>/<version>/cli` segments. Blank follows the built-in default;
+an invalid shape falls back to it. It only affects the client fingerprint and is
+not part of the free-lane gate. The standalone service and the management API
+read the same setting.
+
+**Free-lane tool vocabulary.** Overlapping tools (`read`/`edit`/`write`/`glob`/
+`grep`/`skill`/`web_search`/`web_fetch`/`ask_user_question`/`todo_write`/`bash`)
+are declared with the official OpenCode 2.2.x name, description and schema, and
+their arguments are translated back to DSH. `bash` maps to the official `shell`
+to satisfy the gate; DSH-only tools stay under an opaque `clint_` name;
+`patch`/`execute` are never declared and history is not rewritten.
 
 **Serve other local tools.** `Plugins → Our Free Model → Local forward`, enable
 it, then copy the base URL and generate a key. Supported routes:
@@ -707,6 +721,8 @@ it never touches files.
 
 ## Known limitations
 
+- **The free-lane tool vocabulary is a conservative alignment.** Only tools with a real DSH executor are replaced; `read_image` is not merged into `read` (the inbound side cannot reliably distinguish them, and there is no PDF executor), `subagent` keeps the DSH schema, `patch`/`execute` are never declared, and history calls are not rewritten. The official schemas come from `refercodes/js/opencode` 2.2.7; the local table is `src/tool-semantics.js`.
+- **The two UA segments are a local patch.** `clientChannel` / `clientVersion` only affect the free lane; an upstream update or the plugin's self-updater overwrites the patch (same risk surface as the credential patch). The standalone UI has no input yet; its management API accepts the fields.
 - **"No usage cap" means no cap to buy.** There is no balance, no plan and no per-token billing; the lane is metered by session rate, though, and hammering it surfaces as `429`. The plugin marks the model *quota reached* rather than hiding it, and the next probe clears the state.
 - **Upstream sessions are per-conversation.** Each conversation is pinned to one stable upstream session (the mapping is persisted in the data directory's `session-map.json`), so concurrent conversations never share upstream state. Turns that arrive without a conversation id (some host call shapes, local-gateway requests with no `user`/`conversation`) fall back to a reserved `global` session shared by all such turns, including their KV cache — run parallel sensitive conversations through a call shape that carries a conversation id; the plugin logs a one-time warning for the first id-less turn. The free lane meters quota per session, so a fresh session per id-less request is not an option — that is the cost of the quota model. Aggregate-lane requests additionally carry an `x-session-id` header so a provider that keeps per-session state cannot merge concurrent conversations on the same key; the EAC lane deliberately sends no session header, because its shared-pool admission gate does not recognize the free lane's session fingerprint.
 - **Some upstream models are slow.** `nemotron-3.5-lightning-free` measured over 30 s to first token in one run. That is upstream latency, and the dashboard reports it rather than hiding it.

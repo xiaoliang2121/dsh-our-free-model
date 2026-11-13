@@ -2,7 +2,7 @@
 
 本目录是**从上游导入的第三方插件**（`dsh-our-free-model`，本仓库以 git 子模块收录），不在 `../AGENTS.md` 的自研插件清单里，但仓库级约定照样适用。形态是纯 ESM 的 dsh 插件：Host 半身 `index.js` 管适配器注册、探测、设置与 webServer 路由，浏览器半身是手写单文件 `client.js`，宿主接口只在 `adapter/` 接缝里出现。
 
-**它与其余插件的最大差别是带着本地补丁**：免费车道凭据注入、界面入口注册（`plugins.bundle.config`，键=包名）与 EAC 出口代理（`settings.eacProxy`，解析在 `src/eac.js`），见 `../docs/limitations.md` 的「dsh-llm-our-free-model（第三方子模块，含本地补丁）」与 `../docs/KNOWN_ISSUES.md` 的 `KI-037`、`KI-038`。动手前先确认要改的地方是不是补丁面——是的话，改法要能承受上游更新。
+**它与其余插件的最大差别是带着本地补丁**：免费车道凭据注入、界面入口注册（`plugins.bundle.config`，键=包名）、EAC 出口代理（`settings.eacProxy`）、免费车道 UA（`clientChannel`/`clientVersion`）与工具语义映射（`src/tool-semantics.js`），见 `../docs/limitations.md` 的「dsh-llm-our-free-model（第三方子模块，含本地补丁）」与 `../docs/KNOWN_ISSUES.md` 的 `KI-036`–`KI-038`、`KI-041`、`KI-042`。动手前先确认要改的地方是不是补丁面——是的话，改法要能承受上游更新。
 
 ## 文档路由（先看这里）
 
@@ -14,6 +14,8 @@
 | 看免费车道上游闸门现况 | `docs/free-lane-wire.md`「结论：现在的闸门」 |
 | 改免费车道传输（Bun 子进程、代理、清理） | `docs/oc-free-transport.md`「Runtime prerequisite」、`src/bun-fetch.js` |
 | 改凭据、身份、请求整形 | `../docs/limitations.md`「dsh-llm-our-free-model（第三方子模块，含本地补丁）」、`src/opencode-credential.js` |
+| 改免费车道工具词汇（官方 name/schema、入站参数） | `src/tool-semantics.js`、`docs/free-lane-wire.md`「2026-11-13：语义映射」 |
+| 改免费车道 UA（channel/version） | `src/http.js` 的 `resolveClientUserAgent` / `setClientUserAgentSource`、`index.js` 的设置接线、`client.js` 的 Preferences |
 | 想"恢复"渠道包的 OpenCode 账号接入 | `docs/pr97-reviewed-channels.md`「决策」 |
 | 动设置、用量、凭据落盘 | `README.md`「安全与隐私」 |
 | 改浏览器半身、界面入口或 EAC 代理 | `../docs/limitations.md`「dsh-llm-our-free-model（第三方子模块，含本地补丁）」 |
@@ -29,6 +31,8 @@
 ```bash
 node scripts/test-all.mjs --mode contributor   # 离线全量
 node scripts/opencode-credential-test.mjs      # 本仓库补丁：凭据解析与产物接线
+node scripts/client-ua-test.mjs                # 本仓库补丁：UA 设置路由与线上 UA
+node scripts/tool-semantics-wire-test.mjs      # 本仓库补丁：出站词汇 + 入站参数
 node scripts/build-legacy-payload.mjs          # 改了 src/o2a/ 后重建产物 src/o2a.js
 node scripts/build-legacy-payload.mjs --check  # 校验产物与源一致
 ```
@@ -45,4 +49,6 @@ node scripts/build-legacy-payload.mjs --check  # 校验产物与源一致
 8. **改整形前先取证**：上游闸门未文档化，用 `scripts/probes/` 或真实 A/B 定因，别按"看起来应该"推断。
 9. **跑离线套件前清掉 `https_proxy`/`http_proxy`/`NODE_USE_ENV_PROXY`**：否则 `channel-network` 连本机代理假失败。
 10. **`client.js` 的赞助区块是生成物**：`BEGIN GENERATED SPONSOR` 到 `END` 之间由 `scripts/build-sponsor.mjs` 写入，不要手改，改完跑一次它。
-11. **不自行提交**：按 `../AGENTS.md` 停在改动状态，提交由用户决定。
+11. **默认整形是语义路径**：`applyFingerprint` 默认把重叠工具换成官方 OpenCode 2.2.x 词汇，入站由 `src/stream.js` 在 `block-end` 把参数译回 DSH；forward 入口必须传 `toolSemantics: false` 以保留旧的「全量改名 + 13 工具」路径，不得把外部客户端的工具名翻成 DSH 参数。
+12. **工具语义只改 `src/tool-semantics.js`**：不要塞进 `src/o2a/`（SYNC.md 要求零插件依赖）；官方 schema 复用 `src/o2a.js` 的 `officialTool`，`todowrite` 用本地定义。文件已进 `package.json.files` 与 `scripts/pack-standalone.mjs` 清单。
+13. **不自行提交**：按 `../AGENTS.md` 停在改动状态，提交由用户决定。
