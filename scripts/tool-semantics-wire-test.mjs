@@ -138,6 +138,24 @@ try {
       todos: [{ content: 'a', status: 'in_progress' }, { content: 'b', status: 'pending' }],
     })
   }
+  // 4. Inbound: host-spelled arguments (the model imitating history) survive.
+  //    Captured live 2026-11-13: read/write lost their file_path and the host
+  //    rejected every call with INVALID_ARGS.
+  nextCalls = [
+    { id: 'c1', name: 'read', args: { file_path: '/a/b.js', offset: 40, limit: 130 } },
+    { id: 'c2', name: 'write', args: { file_path: '/a/b.js', content: 'hi' } },
+  ]
+  {
+    const chunks = await run(toolsOf(['read', 'write']))
+    const calls = chunks.filter(chunk => chunk.block?.type === 'tool-call').map(chunk => chunk.block)
+    const byName = Object.fromEntries(calls.map(call => [call.name, call]))
+    check('host-spelled read keeps its path', JSON.parse(byName.read.arguments), {
+      file_path: '/a/b.js', offset: 40, limit: 130,
+    })
+    check('host-spelled write keeps its path', JSON.parse(byName.write.arguments), {
+      file_path: '/a/b.js', content: 'hi',
+    })
+  }
 } finally {
   globalThis.fetch = oldFetch
   if (oldHome === undefined) delete process.env.DSH_HOME

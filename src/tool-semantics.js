@@ -141,11 +141,34 @@ function shellDescriptionFor(command) {
   return words.length > 80 ? words.slice(0, 77) + '...' : words
 }
 
+/** First value that is a string; official spelling before the DSH fallback. */
+function stringOr(...values) {
+  for (const value of values) {
+    if (typeof value === 'string') return value
+  }
+  return undefined
+}
+
+/** Map an option list from either vocabulary onto the DSH shape. */
+function optionList(value) {
+  if (!Array.isArray(value)) return undefined
+  return value
+    .filter((option) => option !== null && typeof option === 'object')
+    .map((option) => ({
+      label: option.label,
+      ...(typeof option.description === 'string' ? { description: option.description } : {}),
+    }))
+    .filter((option) => typeof option.label === 'string' && option.label !== '')
+}
+
 /** Official -> DSH argument translation, one entry per mapped official name. */
 const INBOUND = {
   read(args) {
     const out = {}
-    if (typeof args.path === 'string') out.file_path = args.path
+    // The model imitates the DSH spelling it saw in earlier calls (history is
+    // not rewritten), so accept both spellings instead of dropping the path.
+    const path = stringOr(args.path, args.file_path)
+    if (path !== undefined) out.file_path = path
     for (const key of ['offset', 'limit']) {
       const value = Number(args[key])
       if (Number.isInteger(value) && value >= 1) out[key] = value
@@ -155,16 +178,21 @@ const INBOUND = {
 
   edit(args) {
     const out = {}
-    if (typeof args.path === 'string') out.file_path = args.path
-    if (typeof args.oldString === 'string') out.old_string = args.oldString
-    if (typeof args.newString === 'string') out.new_string = args.newString
-    if (typeof args.replaceAll === 'boolean') out.replace_all = args.replaceAll
+    const path = stringOr(args.path, args.file_path)
+    if (path !== undefined) out.file_path = path
+    const oldString = stringOr(args.oldString, args.old_string)
+    if (oldString !== undefined) out.old_string = oldString
+    const newString = stringOr(args.newString, args.new_string)
+    if (newString !== undefined) out.new_string = newString
+    const replaceAll = typeof args.replaceAll === 'boolean' ? args.replaceAll : args.replace_all
+    if (typeof replaceAll === 'boolean') out.replace_all = replaceAll
     return out
   },
 
   write(args) {
     const out = {}
-    if (typeof args.path === 'string') out.file_path = args.path
+    const path = stringOr(args.path, args.file_path)
+    if (path !== undefined) out.file_path = path
     if (typeof args.content === 'string') out.content = args.content
     return out
   },
@@ -191,11 +219,16 @@ const INBOUND = {
 
   skill(args) {
     const out = {}
-    if (typeof args.id === 'string') out.name = args.id
+    const id = stringOr(args.id, args.name)
+    if (id !== undefined) out.name = id
     return out
   },
 
   websearch(args) {
+    // A host-shaped call already carries the string array; keep it as-is.
+    if (Array.isArray(args.queries)) {
+      return { queries: args.queries.filter((query) => typeof query === 'string') }
+    }
     return { queries: typeof args.query === 'string' ? [args.query] : [] }
   },
 
@@ -210,18 +243,17 @@ const INBOUND = {
     return {
       questions: questions.map((raw, index) => {
         const source = raw !== null && typeof raw === 'object' ? raw : {}
-        const out = { id: 'q' + String(index), question: source.question }
-        if (typeof source.header === 'string') out.header = source.header
-        if (Array.isArray(source.options)) {
-          out.options = source.options
-            .filter((option) => option !== null && typeof option === 'object')
-            .map((option) => ({
-              label: option.label,
-              ...(typeof option.description === 'string' ? { description: option.description } : {}),
-            }))
-            .filter((option) => typeof option.label === 'string' && option.label !== '')
+        const options = optionList(source.options)
+        // A host-shaped question (it already has an id or the DSH spelling of
+        // multi-select) is kept as-is; translating it again would erase those.
+        const dshShaped = typeof source.id === 'string' || source.multi_select === true
+        const out = {
+          id: dshShaped && typeof source.id === 'string' ? source.id : 'q' + String(index),
+          question: source.question,
         }
-        if (source.multiple === true) out.multi_select = true
+        if (typeof source.header === 'string') out.header = source.header
+        if (options !== undefined) out.options = options
+        if (dshShaped ? source.multi_select === true : source.multiple === true) out.multi_select = true
         return out
       }),
     }
@@ -250,12 +282,22 @@ const INBOUND = {
   },
 
   shell(args) {
-    const out = { description: shellDescriptionFor(args.command) }
+    const out = {}
+    const description = stringOr(args.description)
+    out.description = description !== undefined && description.trim() !== ''
+      ? description
+      : shellDescriptionFor(args.command)
     if (typeof args.command === 'string') out.command = args.command
     if (typeof args.workdir === 'string') out.workdir = args.workdir
+    // Official 0 means "no timeout"; DSH requires a positive value. A
+    // host-shaped call already carries milliseconds and is taken verbatim.
     const timeout = Number(args.timeout)
     if (Number.isFinite(timeout) && timeout > 0) out.timeoutMs = Math.trunc(timeout)
-    if (args.background === true) out.run_in_background = true
+    else {
+      const timeoutMs = Number(args.timeoutMs)
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) out.timeoutMs = Math.trunc(timeoutMs)
+    }
+    if (args.background === true || args.run_in_background === true) out.run_in_background = true
     return out
   },
 }

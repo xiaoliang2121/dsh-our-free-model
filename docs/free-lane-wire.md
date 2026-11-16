@@ -119,7 +119,7 @@ vendored 的 `vendor/channel-pack/src/opencode*.ts`）保持同一套形状。
 （文件对照、七条有意偏差、升级手册见 `src/o2a/SYNC.md`）。`src/upstream.js`
 保留为适配层，公开导出不变。
 
-## 2026-11-13：默认整形改为「语义映射（保守档）」
+## 默认整形：语义映射（保守档）
 
 本节的结论**取代**下面「本次的线上形状（v1.4.6）」作为**默认路径**；v1.4.6 的「全部客户端工具改名 + 追加官方 13 工具」仍保留为 forward 监听器的 legacy 路径（applyFingerprint(body, style, { toolSemantics: false })），因为它的调用方是任意 OpenAI/Anthropic 客户端，不是本宿主。
 
@@ -134,8 +134,9 @@ vendored 的 `vendor/channel-pack/src/opencode*.ts`）保持同一套形状。
 | 占位提示 | 只对「宿主没有对应执行者、但闸门要求」的 read/shell 追加；映射到的官方工具不再被说成占位 |
 | 历史 | 不重写（闸门只读 tools，不读历史；只改名字不改参数会留下两套词汇） |
 | 响应侧 | block-end 同时还原名字与完整参数；tool-call-delta 只还原名字；参数 JSON 解析失败原样透传 |
+| 入参拼写 | 官方与 DSH 两套拼写都接受（path/file_path、oldString/old_string、queries 数组、timeoutMs 等）：历史不重写，模型会模仿宿主拼写 |
 
-参数翻译与两个插件的公共表见父仓 docs/data-formats.md「免费车道的工具语义映射（2026-11-13）」。保守档边界：read_image 不合并到 read（入站无法可靠区分，PDF 无执行者）、subagent 保留 DSH schema、patch/execute 不声明、历史不重写。
+参数翻译与两个插件的公共表见父仓 docs/data-formats.md「免费车道的工具语义映射」。保守档边界：read_image 不合并到 read（入站无法可靠区分，PDF 无执行者）、subagent 保留 DSH schema、patch/execute 不声明、历史不重写。
 
 为什么改：v1.4.6 的全量改名会让模型看到不透明工具名、每请求多约 5.4k token，并且 DSH 独有工具无法按官方词汇表达；语义映射只替换模型真正能执行的重叠工具，既保留闸门形态，也让模型看到官方词汇。真机 A/B（闸门到底读 read+shell 还是 bash+read、是否逐字校验 schema）待免费额度恢复后执行（父仓 KI-042）。
 
