@@ -4142,15 +4142,18 @@ window.__ModuleLoader__.load({
         h('div', { className: 'ofm_row', style: { gap: 20 } },
           h(Switch, { checked: settings.hideFreeModels === true, disabled: busy, label: t('pref.hideFreeModels'), onChange: () => onApply({ hideFreeModels: settings.hideFreeModels !== true }) }),
           h(Switch, { checked: settings.hideEacModels === true, disabled: busy, label: t('pref.hideEacModels'), onChange: () => onApply({ hideEacModels: settings.hideEacModels !== true }) })),
-        h('div', { className: 'ofm_row' },
-          field(t('pref.interval'), h('input', { className: 'ofm_input', style: { maxWidth: 100 }, value: draft?.probeIntervalMinutes ?? 15, onChange: e => setDraft(c => ({ ...c, probeIntervalMinutes: Number(e.target.value.replace(/\D/g, '')) || 0 })) })),
-          field(t('pref.maxTokens'), h('input', { className: 'ofm_input', style: { maxWidth: 120 }, value: draft?.defaultMaxTokens ?? 32768, onChange: e => setDraft(c => ({ ...c, defaultMaxTokens: Number(e.target.value.replace(/\D/g, '')) || 0 })) })),
-          h(Button, { kind: 'primary', disabled: busy, onClick: () => onApply({ probeIntervalMinutes: draft.probeIntervalMinutes, defaultMaxTokens: draft.defaultMaxTokens }) }, t('forward.apply'))),
+        // Client identity sits above the probe/output numbers here: it explains
+        // how this machine looks upstream, which is the setting most people
+        // reach for first, and its hint belongs directly under the two fields.
         h('div', { className: 'ofm_row' },
           field(t('pref.uaChannel'), h('input', { className: 'ofm_input', style: { maxWidth: 120 }, value: draft?.clientChannel ?? '', placeholder: 'latest', onChange: e => setDraft(c => ({ ...c, clientChannel: e.target.value })) })),
           field(t('pref.uaVersion'), h('input', { className: 'ofm_input', style: { maxWidth: 120 }, value: draft?.clientVersion ?? '', placeholder: '2.2.5', onChange: e => setDraft(c => ({ ...c, clientVersion: e.target.value })) })),
           h(Button, { kind: 'primary', disabled: busy, onClick: () => onApply({ clientChannel: String(draft?.clientChannel ?? '').trim(), clientVersion: String(draft?.clientVersion ?? '').trim() }) }, t('pref.uaApply'))),
         h('p', { className: 'ofm_note' }, t('pref.uaNote')),
+        h('div', { className: 'ofm_row' },
+          field(t('pref.interval'), h('input', { className: 'ofm_input', style: { maxWidth: 100 }, value: draft?.probeIntervalMinutes ?? 15, onChange: e => setDraft(c => ({ ...c, probeIntervalMinutes: Number(e.target.value.replace(/\D/g, '')) || 0 })) })),
+          field(t('pref.maxTokens'), h('input', { className: 'ofm_input', style: { maxWidth: 120 }, value: draft?.defaultMaxTokens ?? 32768, onChange: e => setDraft(c => ({ ...c, defaultMaxTokens: Number(e.target.value.replace(/\D/g, '')) || 0 })) })),
+          h(Button, { kind: 'primary', disabled: busy, onClick: () => onApply({ probeIntervalMinutes: draft.probeIntervalMinutes, defaultMaxTokens: draft.defaultMaxTokens }) }, t('forward.apply'))),
         h('div', { className: 'ofm_row', style: { gap: 8 } },
           h('span', { className: 'ofm_pill' }, `${t('pref.egress')}: ${summary.egress?.ip ?? '—'}${summary.egress?.country ? ` (${summary.egress.country})` : ''}`),
           h('span', { className: 'ofm_pill' }, `${t('pref.probedAt')}: ${ago(summary.probedAt, t.locale)}`)))

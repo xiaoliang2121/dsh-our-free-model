@@ -51,6 +51,8 @@ const { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, Mode
 const t = key => DICT.zh[key] ?? key
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes)
   : tree && typeof tree === 'object' ? [tree, ...nodes(tree.children)] : []
+const texts = tree => Array.isArray(tree) ? tree.flatMap(texts)
+  : tree && typeof tree === 'object' ? texts(tree.children) : typeof tree === 'string' ? [tree] : []
 const render = (Component, props) => { cursor = 0; return Component(props) }
 let summaryReads = 0, statsReads = 0
 const props = {
@@ -160,6 +162,14 @@ for (const language of ['zh', 'en']) {
   const preferences = render(Preferences, { summary, t: translate, onApply: patch => writes.push(patch) })
   nodes(preferences).find(node => node.props.label === translate('pref.hideEacModels')).props.onChange()
   assert.deepEqual(writes.pop(), { hideEacModels: true })
+  // Client identity is the row people reach for first, and its hint must stay
+  // attached to the two fields it explains rather than drift below the numbers.
+  const order = texts(preferences)
+  const uaAt = order.indexOf(translate('pref.uaChannel'))
+  const noteAt = order.indexOf(translate('pref.uaNote'))
+  const intervalAt = order.indexOf(translate('pref.interval'))
+  assert.ok(uaAt >= 0 && intervalAt > uaAt, 'client identity renders above the refresh interval')
+  assert.ok(noteAt > uaAt && noteAt < intervalAt, 'its hint stays between the identity row and the numbers')
 }
 console.log('ok  visibility fallback isolation, validation, recovery controls and bilingual plugin actions')
 
