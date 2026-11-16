@@ -51,6 +51,9 @@ window.__ModuleLoader__.load({
         retry: '重试',
         'effects.enabled': '视觉特效',
         'effects.hint': '控制背景光晕、毛玻璃和装饰动画；鱼缸和模型功能始终保留。',
+        'detail.fold': '插件简介',
+        'detail.show': '展开插件简介',
+        'detail.hide': '收起插件简介',
         'state.available': '可用',
         'state.region-blocked': '地区受限',
         'state.unavailable': '暂不可用',
@@ -854,6 +857,9 @@ window.__ModuleLoader__.load({
         retry: 'Retry',
         'effects.enabled': 'Visual effects',
         'effects.hint': 'Toggle background glow, glass blur and decorative motion. The aquarium and model features stay available.',
+        'detail.fold': 'Plugin intro',
+        'detail.show': 'Show plugin intro',
+        'detail.hide': 'Hide plugin intro',
         'state.available': 'Available',
         'state.region-blocked': 'Region-limited',
         'state.unavailable': 'Unavailable',
@@ -2639,6 +2645,10 @@ window.__ModuleLoader__.load({
 
 /* 装饰特效默认关闭；鱼缸独立保留。布局用的 transform 不受影响。 */
 .ofm_navtools{grid-column:2;grid-row:1;display:flex;align-items:center;justify-self:end;gap:12px;flex-wrap:wrap}
+/* 插件页首段是宿主按包内 README 渲染的详情文档，宿主丢弃 HTML 且没有折叠控件，
+   所以默认收起放在这里：展开态由 <html data-ofm-detail="open"> 打开。选择器读的是
+   宿主插件详情页的属性，宿主改版后本条会静默失效（退回显示），不影响设置功能。 */
+html:not([data-ofm-detail="open"]) [data-plugin-detail="dsh-our-free-model"] [data-detail-document]{display:none}
 .ofm_root[data-ofm-effects="off"]::before{content:none}
 .ofm_root[data-ofm-effects="off"],
 .ofm_root[data-ofm-effects="off"] :not(.ofm_tank):not(.ofm_tank *){
@@ -7050,7 +7060,28 @@ window.__ModuleLoader__.load({
     // upgrader triggers — comes back to the page the user was reading.
     const EFFECTS_KEY = 'ofm.visualEffects'
     const TAB_KEY = 'ofm.tab'
+    // 插件页的 README 由宿主渲染（见 CSS 里的同名规则），折叠状态记在这里，
+    // 值沿用视觉特效开关的 'on' / 'off'：缺省即收起。
+    const DETAIL_KEY = 'ofm.detailOpen'
     const TABS = ['free', 'eac', 'channels', 'aggregate', 'workspace', 'saver', 'routing', 'ledger', 'logs', 'gateway', 'upgrade', 'picks']
+
+    /** 宿主详情文档是否展开：存储不可用时按收起处理。 */
+    function detailOpenStored() {
+      try { return window.localStorage?.getItem(DETAIL_KEY) === 'on' } catch { return false }
+    }
+
+    /**
+     * 把折叠状态写到 <html data-ofm-detail>，由 CSS 决定宿主详情文档的显隐。
+     * `root` 可注入以便测试；无 DOM（headless 渲染）或瘦桩（没有 dataset）时为空操作。
+     */
+    function applyDetailOpen(open, root) {
+      try {
+        const target = root ?? (typeof document === 'undefined' ? undefined : document.documentElement)
+        if (!target?.dataset) return
+        if (open) target.dataset.ofmDetail = 'open'
+        else delete target.dataset.ofmDetail
+      } catch { /* 无 DOM 或只读 dataset：折叠退化为不可用，不阻塞设置页 */ }
+    }
     const WORKSPACE_CSS = `
       .who{min-width:0}
       .who .name,.nm .n,.lib-path{white-space:normal!important;overflow-wrap:anywhere;overflow:visible!important;text-overflow:clip!important}
@@ -7278,6 +7309,15 @@ window.__ModuleLoader__.load({
         try { window.localStorage?.setItem(EFFECTS_KEY, next ? 'on' : 'off') } catch { /* 当前页面仍可切换 */ }
         return next
       })
+      /* 插件页的 README 是宿主渲染的一整段长文，默认收起；这个开关是它唯一
+         的展开入口。状态写入 <html data-ofm-detail>，由 CSS 控制显隐。 */
+      const [detailOpen, setDetailOpen] = useState(detailOpenStored)
+      const toggleDetail = () => setDetailOpen(current => {
+        const next = !current
+        try { window.localStorage?.setItem(DETAIL_KEY, next ? 'on' : 'off') } catch { /* 本次会话仍可切换 */ }
+        return next
+      })
+      useEffect(() => { applyDetailOpen(detailOpen) }, [detailOpen])
       /* The disclaimer is not a gate on the lanes: it reads once on the first
          settings visit and is reopenable afterwards. `undefined` means the answer
          has not arrived yet, which is neither "show it" nor "hide it". */
@@ -7379,6 +7419,13 @@ window.__ModuleLoader__.load({
             onClick: () => setTab(id),
           }, label, num === null ? null : h('span', { className: 'ofm_tabnum' }, String(num))))),
         h('div', { className: 'ofm_navtools', title: t('effects.hint') },
+          h('button', {
+            type: 'button', className: 'ofm_linkbtn',
+            'aria-expanded': detailOpen ? 'true' : 'false',
+            title: detailOpen ? t('detail.hide') : t('detail.show'),
+            onClick: toggleDetail,
+          },
+            h('span', { 'aria-hidden': 'true' }, detailOpen ? '▾' : '▸'), ' ', t('detail.fold')),
           h(Switch, { checked: effects, label: t('effects.enabled'), onChange: toggleEffects }),
           h(StarButton, { t })))
 
@@ -7739,6 +7786,10 @@ window.__ModuleLoader__.load({
         return () => style.remove()
       }, 'our-free-model: styles')
 
+      // 已记住「展开插件简介」的浏览器在页面渲染前就拿到 <html data-ofm-detail>，
+      // 否则每次进插件页都要先看到收起态再弹开。
+      ctx.effect(() => { applyDetailOpen(detailOpenStored()) }, 'our-free-model: detail fold')
+
       // ── push subscription ───────────────────────────────────────────────────
       // One EventSource for the whole app surface: new announcements become
       // toasts (and OS notifications when opted in), urgent ones open a modal,
@@ -7927,7 +7978,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     exports.name = 'our-free-model'
     // Headless test seams use the same stub React as scripts/client-lint.mjs.
-    exports.__test = { parseSafeHtml, safeUrl, sanitizeStyle, htmlToDom, buildHeatCells, Heatmap, ChannelsPage, UpgradePanel, useEacLogin, EacAuth, PicksPage, RecoCard, DICT, useChannelRpc, Shell, SubscriptionsPage, Disclaimer, CSS, LimitEditor, ModelCard, limitPatchOf }
+    exports.__test = { parseSafeHtml, safeUrl, sanitizeStyle, htmlToDom, buildHeatCells, Heatmap, ChannelsPage, UpgradePanel, useEacLogin, EacAuth, PicksPage, RecoCard, DICT, useChannelRpc, Shell, SubscriptionsPage, Disclaimer, CSS, LimitEditor, ModelCard, limitPatchOf, detailOpenStored, applyDetailOpen }
     return module.exports
   },
 })

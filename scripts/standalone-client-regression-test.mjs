@@ -9,11 +9,15 @@ import { filterModels } from '../packages/standalone/frontend/models-data.mjs'
 import { visibilityCopy } from '../packages/standalone/frontend/visibility-data.mjs'
 
 const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  .replace('exports.__test = {', 'exports.__test = { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity,')
+  .replace('exports.__test = {', 'exports.__test = { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity, detailOpenStored, applyDetailOpen,')
 let bundle
+const stored = new Map()
 const window = {
   __ModuleLoader__: { load: value => { bundle = value } },
-  localStorage: { getItem: key => key === 'ofm.tab' ? 'free' : null },
+  localStorage: {
+    getItem: key => key === 'ofm.tab' ? 'free' : (stored.has(key) ? stored.get(key) : null),
+    setItem: (key, value) => { stored.set(key, value) },
+  },
 }
 let cursor = 0
 const cells = []
@@ -47,7 +51,7 @@ const fetch = async (url, options) => {
   })
 }
 new Function('window', 'fetch', source)(window, fetch)
-const { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity } = bundle.factory(() => react).__test
+const { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity, CSS, detailOpenStored, applyDetailOpen } = bundle.factory(() => react).__test
 const t = key => DICT.zh[key] ?? key
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes)
   : tree && typeof tree === 'object' ? [tree, ...nodes(tree.children)] : []
@@ -73,6 +77,39 @@ await first
 assert.equal(page().props.catalogBusy, false)
 assert.equal(summaryReads, 1)
 assert.equal(statsReads, 1)
+
+// 插件页首段 README 是宿主渲染的，没有折叠 API：导航栏的开关写 <html data-ofm-detail>，
+// 由 scoped CSS 收起宿主文档。这里钉住默认态、持久化与降级行为。
+const foldButton = () => nodes(render(Shell, props))
+  .find(node => node.type === 'button' && node.props.className === 'ofm_linkbtn' && node.props['aria-expanded'] !== undefined)
+const collapsed = foldButton()
+assert.ok(collapsed, 'the nav carries a disclosure for the Host-rendered plugin README')
+assert.equal(collapsed.props['aria-expanded'], 'false', 'the plugin README starts collapsed')
+assert.equal(collapsed.props.title, t('detail.show'))
+assert.ok(texts(collapsed).join('').includes(t('detail.fold')))
+assert.equal(stored.get('ofm.detailOpen'), undefined, 'a first visit writes nothing')
+assert.match(CSS, /\[data-plugin-detail="dsh-our-free-model"\]/, 'the fold rule is scoped to this bundle page')
+assert.match(CSS, /\[data-detail-document\]/, 'the fold rule targets the Host-rendered detail document')
+collapsed.props.onClick()
+const expanded = foldButton()
+assert.equal(expanded.props['aria-expanded'], 'true', 'a click expands the plugin README')
+assert.equal(expanded.props.title, t('detail.hide'))
+assert.equal(stored.get('ofm.detailOpen'), 'on')
+assert.equal(detailOpenStored(), true)
+cells.length = 0
+assert.equal(foldButton().props['aria-expanded'], 'true', 'the choice survives a remount')
+foldButton().props.onClick()
+assert.equal(stored.get('ofm.detailOpen'), 'off')
+assert.equal(detailOpenStored(), false)
+assert.equal(foldButton().props['aria-expanded'], 'false')
+const html = { dataset: {} }
+applyDetailOpen(true, html)
+assert.equal(html.dataset.ofmDetail, 'open')
+applyDetailOpen(false, html)
+assert.equal('ofmDetail' in html.dataset, false)
+applyDetailOpen(true, {})
+applyDetailOpen(true, undefined)
+
 const failed = page().props.reprobe()
 reject(new Error('isolated probe failure'))
 await failed

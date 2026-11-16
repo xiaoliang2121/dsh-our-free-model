@@ -2,8 +2,8 @@
 
 本目录是**从上游导入的第三方插件**（`dsh-our-free-model`，本仓库以 git 子模块收录），不在 `../AGENTS.md` 的自研插件清单里，但仓库级约定照样适用。形态是纯 ESM 的 dsh 插件：Host 半身 `index.js` 管适配器注册、探测、设置与 webServer 路由，浏览器半身是手写单文件 `client.js`，宿主接口只在 `adapter/` 接缝里出现。
 
-**它与其余插件的最大差别是带着本地补丁**：免费车道凭据注入、界面入口注册（`plugins.bundle.config`，键=包名）、EAC 出口代理（`settings.eacProxy`）、免费车道 UA（`clientChannel`/`clientVersion`）、工具语义映射（`src/tool-semantics.js`）与单模型上下文/输出上限（`modelLimits`）。
-补丁清单见 `../docs/limitations.md` 的「dsh-llm-our-free-model（第三方子模块，含本地补丁）」与 `../docs/KNOWN_ISSUES.md` 的 `KI-036`–`KI-038`、`KI-041`、`KI-042`、`KI-044`。动手前先确认要改的地方是不是补丁面——是的话，改法要能承受上游更新。
+**它与其余插件的最大差别是带着本地补丁**：免费车道凭据注入、界面入口注册（`plugins.bundle.config`，键=包名）、插件页 README 默认折叠、EAC 出口代理（`settings.eacProxy`）、免费车道 UA（`clientChannel`/`clientVersion`）、工具语义映射（`src/tool-semantics.js`）与单模型上下文/输出上限（`modelLimits`）。
+补丁清单见 `../docs/limitations.md` 的「dsh-llm-our-free-model（第三方子模块，含本地补丁）」与 `../docs/KNOWN_ISSUES.md` 的 `KI-036`–`KI-038`、`KI-041`、`KI-042`、`KI-044`、`KI-045`。动手前先确认要改的地方是不是补丁面——是的话，改法要能承受上游更新。
 
 ## 文档路由（先看这里）
 
