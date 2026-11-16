@@ -43,3 +43,9 @@ packages/desktop/src-tauri/.node-license-cache/
 packages/desktop/node_modules/
 
 _audit/
+
+
+# >>> managed by sync_agents.py (do not edit) >>>
+CLAUDE.md
+CODEBUDDY.md
+# <<< managed by sync_agents.py <<<
