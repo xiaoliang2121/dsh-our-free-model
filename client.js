@@ -259,7 +259,18 @@ window.__ModuleLoader__.load({
         'routing.capacity': '链路能力交集',
         'routing.capacityUnavailable': '暂时无法读取链路能力交集，请重试。',
         'pref.interval': '自动刷新间隔（分钟）',
-        'pref.maxTokens': '单次输出上限（token）',
+        'pref.maxTokens': '默认单次输出上限（未单设的模型）',
+        'limits.edit': '调整上限',
+        'limits.close': '收起上限',
+        'limits.context': '上下文（token）',
+        'limits.output': '单次输出（token）',
+        'limits.save': '应用',
+        'limits.reset': '恢复默认',
+        'limits.custom': '已调上限',
+        'limits.customTitle': '该模型的上下文或单次输出已被单独下调',
+        'limits.hint': '只能下调，不会超过模型目录值；单模型设置优先于全局「单次输出上限」。宿主压缩要为输出预留空间，上下文建议不低于 128K。',
+        'limits.invalidContext': '上下文需为 131072 以上的整数，且不超过目录值。',
+        'limits.invalidOutput': '单次输出需为 1 以上的整数，且不超过目录值。',
         'pref.egress': '当前出口',
         'pref.probedAt': '最近探测',
         'pref.measuredAt': '最近测量',
@@ -1051,7 +1062,18 @@ window.__ModuleLoader__.load({
         'routing.capacity': 'Chain capability intersection',
         'routing.capacityUnavailable': 'Cannot load chain capacities right now. Please retry.',
         'pref.interval': 'Auto-refresh interval (minutes)',
-        'pref.maxTokens': 'Output ceiling per call (tokens)',
+        'pref.maxTokens': 'Default output ceiling (models without their own cap)',
+        'limits.edit': 'Limits',
+        'limits.close': 'Hide limits',
+        'limits.context': 'Context (tokens)',
+        'limits.output': 'Output per call (tokens)',
+        'limits.save': 'Apply',
+        'limits.reset': 'Reset',
+        'limits.custom': 'Capped',
+        'limits.customTitle': 'This model has its own context or output cap',
+        'limits.hint': 'Caps can only lower the catalog values. A per-model cap wins over the global output ceiling. The host reserves output space before compaction, so keep context at 128K or above.',
+        'limits.invalidContext': 'Context must be an integer of at least 131072 and no larger than the catalog value.',
+        'limits.invalidOutput': 'Output must be an integer of at least 1 and no larger than the catalog value.',
         'pref.egress': 'Current egress',
         'pref.probedAt': 'Last probe',
         'pref.measuredAt': 'Last measurement',
@@ -1758,6 +1780,9 @@ window.__ModuleLoader__.load({
 .ofm_input::placeholder{color:var(--dsw-alias-label-tertiary)}
 .ofm_input:hover{border-color:color-mix(in srgb,var(--dsw-alias-border-l2) 60%,var(--dsw-alias-label-tertiary))}
 .ofm_input:focus{outline:none;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
+.ofm_limitform{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;align-items:end}
+.ofm_limitform>.ofm_note{grid-column:1/-1;margin:0}
+.ofm_error_note{color:var(--dsw-alias-state-error-primary)}
 /* ══ 开关（spring 滑块） ═══════════════════════════════════════════════ */
 .ofm_switch{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;appearance:none;background:transparent;border:0;padding:0;font:inherit;color:inherit}
 .ofm_switch i{width:36px;height:20px;border-radius:999px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);box-shadow:inset 0 1px 3px rgb(0 0 0 / 8%);position:relative;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease;flex:none}
@@ -3095,6 +3120,7 @@ window.__ModuleLoader__.load({
       onClick: props.onClick,
       title: props.title,
       'aria-label': props['aria-label'],
+      'aria-expanded': props['aria-expanded'],
     }, props.children)
 
     function Section(props) {
@@ -3194,8 +3220,70 @@ window.__ModuleLoader__.load({
     }
 
     // ── model roster ──────────────────────────────────────────────────────────
+    // Mirrors MODEL_LIMIT_MIN_CONTEXT in src/store.js: the host's compaction
+    // subtracts the output reserve (and its own headroom) from the window, so a
+    // smaller context would leave no room for the transcript at all.
+    const LIMIT_MIN_CONTEXT = 131072
+
+    /**
+     * Turn the two editor fields into a settings patch, or name the field that is
+     * wrong. Pure so the wiring can be tested without a live component tree.
+     *
+     * An empty field means "no cap", not zero: the store treats a missing key as
+     * "follow the catalog / the global ceiling", and posting 0 would be clamped
+     * into an extreme instead.
+     */
+    function limitPatchOf(draft, model) {
+      const parse = value => {
+        const raw = String(value ?? '').trim()
+        return raw === '' ? undefined : Number(raw)
+      }
+      const context = parse(draft?.contextWindow)
+      const output = parse(draft?.maxOutput)
+      const catalogContext = Number(model?.catalogContextWindow ?? model?.contextWindow)
+      const catalogOutput = Number(model?.catalogMaxOutput ?? model?.maxOutput)
+      if (context !== undefined && (!Number.isSafeInteger(context) || context < LIMIT_MIN_CONTEXT
+        || (Number.isFinite(catalogContext) && context > catalogContext))) return { error: 'context' }
+      if (output !== undefined && (!Number.isSafeInteger(output) || output < 1
+        || (Number.isFinite(catalogOutput) && output > catalogOutput))) return { error: 'output' }
+      const patch = {}
+      if (context !== undefined) patch.contextWindow = context
+      if (output !== undefined) patch.maxOutput = output
+      return { patch }
+    }
+
+    /**
+     * The per-model cap editor. Presentational on purpose: the card owns the
+     * draft and the open/closed bit, so this can be rendered in a test with a
+     * plain props bag and no hooks.
+     */
+    function LimitEditor(props) {
+      const { t, model, draft, error, busy, onChange, onSave, onReset } = props
+      const placeholder = value => value === undefined || value === null ? '' : String(value)
+      return h('div', { className: 'ofm_limitform' },
+        h('label', { className: 'ofm_field' }, h('span', null, t('limits.context')),
+          h('input', {
+            className: 'ofm_input', inputMode: 'numeric', value: draft?.contextWindow ?? '',
+            placeholder: placeholder(model?.catalogContextWindow ?? model?.contextWindow),
+            onChange: event => onChange('contextWindow', event.target.value),
+          })),
+        h('label', { className: 'ofm_field' }, h('span', null, t('limits.output')),
+          h('input', {
+            className: 'ofm_input', inputMode: 'numeric', value: draft?.maxOutput ?? '',
+            placeholder: placeholder(model?.catalogMaxOutput ?? model?.maxOutput),
+            onChange: event => onChange('maxOutput', event.target.value),
+          })),
+        h('p', { className: 'ofm_note' + (error === '' ? '' : ' ofm_error_note') }, error === '' ? t('limits.hint') : error),
+        h('div', { className: 'ofm_row' },
+          h(Button, { kind: 'primary', disabled: busy === true, onClick: onSave }, t('limits.save')),
+          h(Button, { kind: 'ghost', disabled: busy === true, onClick: onReset }, t('limits.reset'))))
+    }
+
     function ModelCard(props) {
-      const { model: m, t, onBench, bench, locked, eacLogin, onVisibility, busy } = props
+      const { model: m, t, onBench, bench, locked, eacLogin, onVisibility, onLimits, busy } = props
+      const [limitsOpen, setLimitsOpen] = useState(false)
+      const [limitDraft, setLimitDraft] = useState({ contextWindow: '', maxOutput: '' })
+      const [limitError, setLimitError] = useState('')
       const listed = m.availabilitySource === 'listing'
       const manual = m.availabilitySource === 'manual'
       const stateKey = `state.${m.availability}`
@@ -3215,6 +3303,31 @@ window.__ModuleLoader__.load({
       const levels = Array.isArray(m.efforts) && m.efforts.length > 0
         ? m.efforts.map(levelName).join(' / ')
         : undefined
+      // The draft starts from what is stored, not from the clamped row: opening
+      // the editor on a capped model shows the cap the user set, which is what
+      // "restore default" is about to clear.
+      const toggleLimits = () => {
+        if (!limitsOpen) {
+          setLimitDraft({
+            contextWindow: m.limits?.contextWindow === undefined ? '' : String(m.limits.contextWindow),
+            maxOutput: m.limits?.maxOutput === undefined ? '' : String(m.limits.maxOutput),
+          })
+          setLimitError('')
+        }
+        setLimitsOpen(!limitsOpen)
+      }
+      const saveLimits = () => {
+        const result = limitPatchOf(limitDraft, m)
+        if (result.error === 'context') return setLimitError(t('limits.invalidContext'))
+        if (result.error === 'output') return setLimitError(t('limits.invalidOutput'))
+        setLimitError('')
+        return onLimits(m, result.patch)
+      }
+      const resetLimits = () => {
+        setLimitDraft({ contextWindow: '', maxOutput: '' })
+        setLimitError('')
+        return onLimits(m, {})
+      }
       return h('article', { className: 'ofm_card' + (dim ? ' dim' : '') + (m.pinned === true ? ' pinned' : '') },
         h('div', { className: 'ofm_cardhead' },
           m.channel === 'eac' ? h('span', { className: 'ofm_chantag', title: t('tag.eacChannel') }, 'EAC') : null,
@@ -3237,6 +3350,22 @@ window.__ModuleLoader__.load({
               `${t('tag.rung')} ${kilo(rung.tokens)}`),
           levels === undefined ? null
             : h('span', { className: 'ofm_tag', title: t('tag.levelsTitle') }, `${t('tag.levels')} ${levels}`)),
+        onLimits === undefined ? null
+          : h(Fragment, null,
+            h('div', { className: 'ofm_row' },
+              h(Button, {
+                kind: 'ghost', disabled: busy === true,
+                'aria-expanded': limitsOpen ? 'true' : 'false', onClick: toggleLimits,
+              }, limitsOpen ? t('limits.close') : t('limits.edit')),
+              m.limits === null || m.limits === undefined ? null
+                : h('span', { className: 'ofm_tag', title: t('limits.customTitle') }, t('limits.custom'))),
+            limitsOpen
+              ? h(LimitEditor, {
+                t, model: m, draft: limitDraft, error: limitError, busy,
+                onChange: (field, value) => setLimitDraft(current => ({ ...current, [field]: value })),
+                onSave: saveLimits, onReset: resetLimits,
+              })
+              : null),
         m.channel === 'eac' && locked === true
           ? h(Fragment, null,
             h('p', { className: 'ofm_note' }, t('eac.lockedNote')),
@@ -3303,6 +3432,15 @@ window.__ModuleLoader__.load({
         const ids = summary.settings.hiddenModelIds ?? []
         return onApply({ hiddenModelIds: ids.includes(model.id) ? ids.filter(id => id !== model.id) : [...ids, model.id] })
       }
+      // The wire always carries the whole map: `modelLimits` replaces, like
+      // `hiddenModelIds`, so a stale partial map would quietly drop other models'
+      // caps. An empty patch deletes the entry, which is what "reset" means.
+      const saveLimit = onApply === undefined ? undefined : (model, patch) => {
+        const next = { ...(summary.settings.modelLimits ?? {}) }
+        if (patch.contextWindow === undefined && patch.maxOutput === undefined) delete next[model.id]
+        else next[model.id] = patch
+        return onApply({ modelLimits: next })
+      }
       // 只有拿到过明确判定（网关答过 /eac/status）且未授权时才上锁：状态未知
       // 不该显示一把凭空的锁，网关不可达时本地记录仍算已授权。
       const locked = auth !== undefined && auth.available === true && auth.authorized !== true
@@ -3312,7 +3450,7 @@ window.__ModuleLoader__.load({
             hint === undefined ? null : h('span', { className: 'ofm_sec_hint' }, hint)),
           h('div', { className: 'ofm_grid' }, list.map(m => h(ModelCard, {
             key: m.id, model: m, t, onBench, locked: m.channel === 'eac' && locked, eacLogin,
-            onVisibility: toggleModel, busy,
+            onVisibility: toggleModel, onLimits: saveLimit, busy,
             bench: { running: benches[m.id]?.running === true, ...benches[m.id]?.result === undefined ? {} : { result: benches[m.id].result } },
           }))))
       // The lane closed at the gate is the one "no EAC models" case the page can
@@ -7786,7 +7924,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     exports.name = 'our-free-model'
     // Headless test seams use the same stub React as scripts/client-lint.mjs.
-    exports.__test = { parseSafeHtml, safeUrl, sanitizeStyle, htmlToDom, buildHeatCells, Heatmap, ChannelsPage, UpgradePanel, useEacLogin, EacAuth, PicksPage, RecoCard, DICT, useChannelRpc, Shell, SubscriptionsPage, Disclaimer, CSS }
+    exports.__test = { parseSafeHtml, safeUrl, sanitizeStyle, htmlToDom, buildHeatCells, Heatmap, ChannelsPage, UpgradePanel, useEacLogin, EacAuth, PicksPage, RecoCard, DICT, useChannelRpc, Shell, SubscriptionsPage, Disclaimer, CSS, LimitEditor, ModelCard, limitPatchOf }
     return module.exports
   },
 })

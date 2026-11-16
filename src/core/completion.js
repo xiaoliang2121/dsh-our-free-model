@@ -2,6 +2,7 @@ import { ROUTE_MAIN, ROUTE_REGION } from '../adapter.js'
 import { toOpenAiUsage } from '../forward.js'
 import { carryFailure } from '../failure.js'
 import { effortsFor, defaultEffortFor } from '../effort.js'
+import { defaultMaxTokensFor } from '../store.js'
 
 export function routableModelIds(snapshot) {
   const membership = new Set(snapshot.membership[ROUTE_MAIN] ?? [])
@@ -16,7 +17,7 @@ export function publicModelRows(snapshot) {
   return snapshot.catalog
     .filter(entry => membership.has(entry.id))
     .map(entry => {
-      const efforts = effortsFor(entry, undefined, snapshot.settings.defaultMaxTokens)
+      const efforts = effortsFor(entry, undefined, defaultMaxTokensFor(entry, snapshot.settings))
       return {
         id: entry.id, object: 'model',
         created: Math.floor(Date.now() / 1000), owned_by: 'our-free-model',

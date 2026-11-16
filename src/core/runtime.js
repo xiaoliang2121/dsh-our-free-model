@@ -4,7 +4,7 @@ import { FreeModelAdapter, ROUTE_MAIN, ROUTE_REGION } from '../adapter.js'
 import { buildCatalog, buildEacCatalog, buildKiloCatalog, isEacEntry, isKiloEntry, parseListing, reviveKiloCatalog } from '../catalog.js'
 import { buildAggregateCatalog, isAggregateEntry } from '../aggregate.js'
 import { buildComboCatalog, isComboEntry, normalizeCombos, pruneRotation } from '../combos.js'
-import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden } from '../store.js'
+import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden, withModelLimits } from '../store.js'
 import { STATE, detectEgress, probeCatalog } from '../probe.js'
 import { CODE, UpstreamError, getJson } from '../http.js'
 import { runModelTest, modelAvailability } from '../model-test.js'
@@ -105,8 +105,13 @@ export function createModelRuntime({
       seen.add(entry.id)
       merged.push(entry)
     }
-    const combos = normalizeCombos(settings.get().combos)
-    comboCatalog = buildComboCatalog(combos, merged)
+    // A chain's capacity is the intersection of its links', so a per-model cap
+    // on a link has to be inside the member rows *before* the combo is built —
+    // otherwise the virtual row advertises a window the links no longer carry,
+    // and the host sizes its compaction against the wrong number.
+    const current = settings.get()
+    const combos = normalizeCombos(current.combos)
+    comboCatalog = buildComboCatalog(combos, merged.map(entry => withModelLimits(entry, current)))
     pruneRotation(combos)
     for (const entry of comboCatalog) {
       if (seen.has(entry.id)) continue
@@ -121,16 +126,28 @@ export function createModelRuntime({
     rebuildCatalog()
   }
   mergeCatalogs()
-  const state = () => ({
-    catalog,
-    membership: computeMembership(catalog, availability.get(), settings.get()),
-    settings: settings.get(),
-    attributionUserAgent,
-    routing: {
-      quota: subscriptionRuntime?.routingQuota?.() ?? {},
-      usage: Object.fromEntries(catalog.map(row => [row.id, stats.get().models?.[row.id]?.calls ?? 0])),
-    },
-  })
+  /**
+   * The view every consumer reads: catalog rows with the user's per-model caps
+   * applied. Kept out of `rebuildCatalog` on purpose — the stored rows must stay
+   * the catalog's own values, or "restore default" would restore the cap.
+   * `withModelLimits` returns a row by identity when it carries no cap, so the
+   * usual path allocates nothing.
+   */
+  const projectedCatalog = current => catalog.map(entry => withModelLimits(entry, current))
+  const state = () => {
+    const current = settings.get()
+    const projected = projectedCatalog(current)
+    return {
+      catalog: projected,
+      membership: computeMembership(projected, availability.get(), current),
+      settings: current,
+      attributionUserAgent,
+      routing: {
+        quota: subscriptionRuntime?.routingQuota?.() ?? {},
+        usage: Object.fromEntries(projected.map(row => [row.id, stats.get().models?.[row.id]?.calls ?? 0])),
+      },
+    }
+  }
   const emitTopology = () => { if (!disposed) onTopology() }
   const adapter = new FreeModelAdapter({
     state,
@@ -412,12 +429,16 @@ export function createModelRuntime({
     // saved, a subscription imported/toggled/removed, a combo edited) rebuilds
     // the merged view without an upstream listing round.
     syncAggregateCatalog() {
-      if (disposed) return catalog
+      if (disposed) return state().catalog
       mergeCatalogs()
       emitTopology()
-      return catalog
+      return state().catalog
     },
-    get catalog() { return catalog },
+    // The public view: per-model caps applied. The raw rows stay in the
+    // closure, so a cap is never destructive — clearing it restores the catalog
+    // value, and a capped copy carries `catalogContextWindow` / `catalogMaxOutput`
+    // when the page needs the number it capped.
+    get catalog() { return state().catalog },
     get egress() { return egress },
     get gatewayLatency() { return gatewayLatency },
     setAttributionUserAgent(value) { attributionUserAgent = value },

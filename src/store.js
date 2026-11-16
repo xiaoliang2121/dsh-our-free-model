@@ -201,6 +201,11 @@ export const SETTINGS_INITIAL = {
   },
   /** Cap a turn's output so a slow lane cannot run away. */
   defaultMaxTokens: 32768,
+  /** Per-model capacity overrides: `{ [model id]: { contextWindow?, maxOutput? } }`.
+   *  Each field can only *lower* what the catalog advertises — a cap, not a
+   *  promotion — which is how a user keeps a roomy model from spending the free
+   *  lane's quota in one long turn. See `withModelLimits`. */
+  modelLimits: {},
   /** 所有模型默认允许一次纯推理检查点续写，false 可关闭。 */
   streamRecovery: true,
   /** Token savers. Tool-output compaction is on by default — it is invisible to
@@ -274,13 +279,14 @@ export const SETTINGS_INITIAL = {
   installedVersion: '',
 }
 
-const validHiddenModelId = value => typeof value === 'string' && value.length > 0
+/** A model id as it can appear in settings: short, trimmed, no control chars. */
+export const validModelId = value => typeof value === 'string' && value.length > 0
   && value.length <= 300 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
 
 export function publicModelVisibility(settings) {
   return {
     hiddenModelIds: [...new Set((Array.isArray(settings?.hiddenModelIds) ? settings.hiddenModelIds : [])
-      .filter(validHiddenModelId))].slice(0, 1000),
+      .filter(validModelId))].slice(0, 1000),
     hideFreeModels: settings?.hideFreeModels === true,
     hideEacModels: settings?.hideEacModels === true,
   }
@@ -296,13 +302,186 @@ export function validateModelVisibility(patch) {
     if (!Object.hasOwn(patch, key)) continue
     const value = patch[key]
     if (key === 'hiddenModelIds'
-      ? !Array.isArray(value) || value.length > 1000 || value.some(id => !validHiddenModelId(id))
+      ? !Array.isArray(value) || value.length > 1000 || value.some(id => !validModelId(id))
       : typeof value !== 'boolean') {
       throw Object.assign(new TypeError(`${key} must be ${key === 'hiddenModelIds' ? 'an array of at most 1000 nonempty model ids (up to 300 characters each)' : 'a boolean'}`), { statusCode: 400 })
     }
     result[key] = Array.isArray(value) ? [...new Set(value)] : value
   }
   return result
+}
+
+/**
+ * Bounds for a per-model capacity override.
+ *
+ * The context floor is not cosmetic. The host's basic compaction
+ * (`resolveCompactSpec`) subtracts the request's `maxTokens` and its headroom
+ * from the context window, and throws when what is left is not positive; a 128K
+ * floor keeps the default 32K request floor and the default 64K headroom from
+ * consuming the whole window. See KI-043 in the repository docs.
+ */
+export const MODEL_LIMIT_MIN_CONTEXT = 131_072
+export const MODEL_LIMIT_MAX_CONTEXT = 4_194_304
+export const MODEL_LIMIT_MAX_OUTPUT = 524_288
+export const MODEL_LIMIT_MAX_MODELS = 1000
+
+const positiveInteger = value => Number.isSafeInteger(value) && value > 0
+
+/**
+ * The usable part of one stored override.
+ *
+ * The settings file has a second writer — the user's editor — so every reader
+ * shares this filter: a value the API would have refused is "no cap", never a
+ * session-breaking number.
+ */
+function usableLimit(limit) {
+  if (limit === null || typeof limit !== 'object' || Array.isArray(limit)) return undefined
+  const entry = {}
+  if (positiveInteger(limit.contextWindow)
+    && limit.contextWindow >= MODEL_LIMIT_MIN_CONTEXT && limit.contextWindow <= MODEL_LIMIT_MAX_CONTEXT) {
+    entry.contextWindow = limit.contextWindow
+  }
+  if (positiveInteger(limit.maxOutput) && limit.maxOutput <= MODEL_LIMIT_MAX_OUTPUT) {
+    entry.maxOutput = limit.maxOutput
+  }
+  return Object.keys(entry).length === 0 ? undefined : entry
+}
+
+/** The stored override for one model, if the file holds a usable one. */
+export function modelLimitOf(settings, id) {
+  const map = settings?.modelLimits
+  if (id === undefined || map === null || typeof map !== 'object' || Array.isArray(map)) return undefined
+  if (!Object.hasOwn(map, id)) return undefined
+  return usableLimit(map[id])
+}
+
+/**
+ * One catalog row with the user's caps applied.
+ *
+ * A cap can only *lower* the advertised capacity: the catalog is what the lane
+ * actually serves, so an override above it would advertise headroom the request
+ * cannot have. Both fields are clamped independently, and a row with no usable
+ * override is returned by identity so the common path allocates nothing.
+ *
+ * The original values ride along as `catalogContextWindow` / `catalogMaxOutput`
+ * so the settings page can validate an edit and show what "restore" restores.
+ *
+ * @param {object} entry - a catalog row
+ * @param {object} settings - the settings document
+ * @returns {object} the same row, or a capped copy of it
+ */
+export function withModelLimits(entry, settings) {
+  if (entry === null || typeof entry !== 'object') return entry
+  const limit = modelLimitOf(settings, entry.id)
+  if (limit === undefined) return entry
+  const baseContext = positiveInteger(entry.contextWindow) ? entry.contextWindow : undefined
+  const baseOutput = positiveInteger(entry.maxOutput) ? entry.maxOutput : undefined
+  const contextWindow = positiveInteger(limit.contextWindow)
+    ? baseContext === undefined ? limit.contextWindow : Math.min(baseContext, limit.contextWindow)
+    : entry.contextWindow
+  const maxOutput = positiveInteger(limit.maxOutput)
+    ? baseOutput === undefined ? limit.maxOutput : Math.min(baseOutput, limit.maxOutput)
+    : entry.maxOutput
+  if (contextWindow === entry.contextWindow && maxOutput === entry.maxOutput) return entry
+  const next = { ...entry, contextWindow, maxOutput }
+  if (contextWindow !== entry.contextWindow && baseContext !== undefined) next.catalogContextWindow = baseContext
+  if (maxOutput !== entry.maxOutput && baseOutput !== undefined) next.catalogMaxOutput = baseOutput
+  return next
+}
+
+/**
+ * The output ceiling one model gets when the caller names none.
+ *
+ * A per-model cap replaces the global `defaultMaxTokens` for that model — the
+ * page says "the global field covers models without their own cap" — and the
+ * model's catalog capacity still bounds both.
+ *
+ * @param {object} entry - a catalog row (already capped or not)
+ * @param {object} settings - the settings document
+ * @returns {number} tokens
+ */
+export function defaultMaxTokensFor(entry, settings) {
+  const global = positiveInteger(settings?.defaultMaxTokens) ? settings.defaultMaxTokens : 32768
+  const capacity = positiveInteger(entry?.maxOutput) ? entry.maxOutput : global
+  const limit = modelLimitOf(settings, entry?.id)
+  const override = limit?.maxOutput
+  return override === undefined ? Math.min(capacity, global) : Math.min(capacity, override)
+}
+
+/** The settings API's view: every usable override, nothing else. */
+export function publicModelLimits(settings) {
+  const map = settings?.modelLimits
+  if (map === null || typeof map !== 'object' || Array.isArray(map)) return {}
+  const out = {}
+  let count = 0
+  for (const [id, limit] of Object.entries(map)) {
+    if (count >= MODEL_LIMIT_MAX_MODELS) break
+    if (!validModelId(id)) continue
+    const usable = usableLimit(limit)
+    if (usable === undefined) continue
+    out[id] = usable
+    count += 1
+  }
+  return out
+}
+
+/**
+ * Validate a `modelLimits` patch before anything is stored.
+ *
+ * The whole map is replaced, like `hiddenModelIds`: the page always sends every
+ * entry it wants to keep. An id that names no catalog model is accepted on
+ * purpose — the catalog can be empty while the lane is unreachable, and a cap
+ * saved now must still apply when the model comes back.
+ *
+ * @param {object} patch - the raw settings patch
+ * @returns {{modelLimits?: object}} the validated map, when the patch names one
+ */
+export function validateModelLimits(patch) {
+  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)
+    || !Object.hasOwn(patch, 'modelLimits')) return {}
+  const invalid = message => Object.assign(new TypeError(message), { statusCode: 400 })
+  const value = patch.modelLimits
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalid('modelLimits must be an object mapping model ids to { contextWindow, maxOutput }')
+  }
+  const entries = Object.entries(value)
+  if (entries.length > MODEL_LIMIT_MAX_MODELS) {
+    throw invalid(`modelLimits carries at most ${MODEL_LIMIT_MAX_MODELS} models`)
+  }
+  const result = {}
+  for (const [id, limit] of entries) {
+    if (!validModelId(id)) {
+      throw invalid('modelLimits keys must be model ids (1-300 characters, no control characters)')
+    }
+    if (limit === null || typeof limit !== 'object' || Array.isArray(limit)) {
+      throw invalid(`modelLimits["${id}"] must be an object of { contextWindow, maxOutput }`)
+    }
+    for (const field of Object.keys(limit)) {
+      if (field !== 'contextWindow' && field !== 'maxOutput') {
+        throw invalid(`modelLimits["${id}"] accepts only contextWindow and maxOutput`)
+      }
+    }
+    const entry = {}
+    if (Object.hasOwn(limit, 'contextWindow')) {
+      const tokens = limit.contextWindow
+      if (!Number.isSafeInteger(tokens) || tokens < MODEL_LIMIT_MIN_CONTEXT || tokens > MODEL_LIMIT_MAX_CONTEXT) {
+        throw invalid(`modelLimits["${id}"].contextWindow must be an integer between ${MODEL_LIMIT_MIN_CONTEXT} and ${MODEL_LIMIT_MAX_CONTEXT}`)
+      }
+      entry.contextWindow = tokens
+    }
+    if (Object.hasOwn(limit, 'maxOutput')) {
+      const tokens = limit.maxOutput
+      if (!Number.isSafeInteger(tokens) || tokens < 1 || tokens > MODEL_LIMIT_MAX_OUTPUT) {
+        throw invalid(`modelLimits["${id}"].maxOutput must be an integer between 1 and ${MODEL_LIMIT_MAX_OUTPUT}`)
+      }
+      entry.maxOutput = tokens
+    }
+    // `{}` is the page's "no cap" row: dropping it keeps the file tidy without
+    // turning a no-op into an error.
+    if (Object.keys(entry).length === 0) continue
+    result[id] = entry
+  }
+  return { modelLimits: result }
 }
 
 export function isModelHidden(entry, settings) {

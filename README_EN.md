@@ -92,7 +92,7 @@ the picker by itself as soon as a probe gets through.
 
 > This repository's local patch moves the entry from Settings to the Plugins page; every “settings page” below refers to that plugin page (historical verification records excepted).
 
-1. **Model roster** — per-model availability, vision vs text-only, context window, max output, the output ceiling each effort rung really sends, measured time-to-first-token, and an on-demand single-call benchmark.
+1. **Model roster** — per-model availability, vision vs text-only, context window, max output, the output ceiling each effort rung really sends, measured time-to-first-token, and an on-demand single-call benchmark. Every card can lower its own model's context window and output ceiling (`Limits`; down only, and it wins over the global ceiling).
 2. **EAC lane authorization** — one-click GitHub sign-in (the browser does the work; nothing to paste), the signed-in name and star verdict, a re-check button and sign-out; model cards carry a lock until authorized. The same tab carries the EAC egress proxy (follow system / direct / custom). The free lane is unaffected.
 2. **Announcement center** — the owner-pushed feed: unread counter, urgency badges, mark-read (single/all), check-now button, OS-notification toggle. Bodies render HTML through the allowlist.
 3. **Usage board** — headline counters, a 17-week token heatmap, a cumulative curve switchable between tokens and request counts and between total and any single model, speed sparklines, and a per-model table.
@@ -258,6 +258,19 @@ the visible answer, which is why a model that cannot switch thinking off gets
 the whole ladder doubled (the model cards in `Plugins → Our Free Model` print the
 number each rung will really send). If answers keep getting cut off, move to
 `Deep`, or raise the per-call output ceiling in the settings.
+
+**Per-model context / output caps.** Each model card has a `Limits` button that
+lowers that one model's context window and output ceiling (stored as
+`modelLimits`). Both can only go **down**, never above the catalog value; a
+per-model cap wins over the page's global default output ceiling, and models
+without their own cap keep following it. The context floor is 128K: the host
+subtracts this turn's output reserve and its own headroom (64K by default) from
+the window before compacting, and a window that small leaves no pressure budget
+and fails on every step. Chain capacity is recomputed from its members' caps;
+channel-pack models are not in this catalog and are unaffected. Caps are keyed by
+model id, survive the model going offline or being delisted, and apply again when
+it returns. Concurrent tabs replace the whole list, so the last save wins (same
+rule as the hidden list).
 
 **Client identity.** The plugin settings page edits the free lane's UA
 `opencode/<channel>/<version>/cli` segments. Blank follows the built-in default;
@@ -750,6 +763,8 @@ node scripts/build-manifest.mjs     # release: regenerate feed/manifest.json
 node scripts/retry-safety-test.mjs  # failures, retry policy and usage counts are durable-log safe
 node scripts/speed-stat-test.mjs    # no call can average its way into a fake tok/s
 node scripts/effort-test.mjs        # a rung is the max_tokens that goes out, and is recorded as itself
+node scripts/model-limits-test.mjs  # per-model context/output caps: down only, projected everywhere, enforced on the wire
+node scripts/model-limits-ui-test.mjs # the card's cap editor: numeric guard, catalog placeholders, error text, entry rule
 node scripts/sniff-test.mjs         # a 2xx body is read by shape: SSE frames, single JSON, empty, split mid-codepoint, abort
 node scripts/release-e2e.mjs        # upgrade against the real manifest, and prove a lying one is refused
 node scripts/picker-test.mjs        # only usable models are advertised, and the picker never goes empty

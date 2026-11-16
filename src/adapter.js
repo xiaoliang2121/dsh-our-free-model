@@ -33,6 +33,7 @@ import { applyTokenSavers, saverConfig } from './token-saver.js'
 import { classifyFailure, describeVerdict, shouldAdvance } from './route/classify.js'
 import { FALLBACK_IMAGE_PRICING } from './image-pricing.js'
 import { isSubscriptionEntry, subscriptionChunks } from './subscription-adapter.js'
+import { defaultMaxTokensFor, modelLimitOf } from './store.js'
 
 /**
  * How long a combo candidate may stay silent before the chain counts the try as
@@ -168,25 +169,31 @@ export class FreeModelAdapter {
 
   async resolveModel(provider, model) {
     const state = this.deps.state()
-    const entry = state.catalog.find(candidate => candidate.id === baseModelId(model))
+    const id = baseModelId(model)
+    const entry = state.catalog.find(candidate => candidate.id === id)
     if (entry === undefined) {
+      // A capped id the catalog cannot name right now (the lane is offline, or
+      // the model is between listings) still resolves at the user's cap instead
+      // of the built-in fallback: the whole point of the cap is that it survives
+      // a catalog round it does not appear in.
+      const limit = modelLimitOf(state.settings, id)
       return {
         provider,
-        id: baseModelId(model),
-        name: baseModelId(model),
-        context: { contextWindow: 131072 },
-        defaultMaxTokens: 8192,
+        id,
+        name: id,
+        context: { contextWindow: limit?.contextWindow ?? 131072 },
+        defaultMaxTokens: limit?.maxOutput ?? 8192,
       }
     }
-    const ceiling = Math.min(entry.maxOutput, state.settings.defaultMaxTokens ?? 32768)
-    const efforts = effortsFor(entry, undefined, state.settings.defaultMaxTokens)
+    const fallback = defaultMaxTokensFor(entry, state.settings)
+    const efforts = effortsFor(entry, undefined, fallback)
     return {
       provider,
       id: entry.id,
       name: entry.name,
       inputModalities: entry.vision ? ['text', 'image'] : ['text'],
       context: { contextWindow: entry.contextWindow },
-      defaultMaxTokens: ceiling,
+      defaultMaxTokens: fallback,
       ...efforts === undefined ? {} : { reasoning: { efforts, defaultEffort: defaultEffortFor(entry) } },
     }
   }
@@ -369,7 +376,7 @@ export class FreeModelAdapter {
       return { advance: false, verdict: null, ok: false }
     }
     if (isSubscriptionEntry(entry)) return yield * this.runSubscription({
-      ...options, maxTokens: Math.min(options.maxTokens ?? settings.defaultMaxTokens ?? entry.maxOutput, entry.maxOutput),
+      ...options, maxTokens: Math.min(options.maxTokens ?? defaultMaxTokensFor(entry, settings), entry.maxOutput),
     }, entry, plan)
 
     const sealed = isEacEntry(entry)
@@ -383,7 +390,7 @@ export class FreeModelAdapter {
     const warnings = []
     const resolveImage = this.deps.resolveImage
     const messages = repairToolPairing(options.messages ?? [])
-    const budget = budgetFor(options.reasoningEffort, entry, options.maxTokens, settings.defaultMaxTokens)
+    const budget = budgetFor(options.reasoningEffort, entry, options.maxTokens, defaultMaxTokensFor(entry, settings))
     const declared = toToolDefs(options.tools, style)
     const policy = recoveryPolicy(settings.streamRecovery)
     const session = sessionForConversation(options.sessionId)
@@ -749,7 +756,7 @@ export class FreeModelAdapter {
         ...options, model: entry.id,
         resolveImage: this.deps.resolveImage,
         toolChoice: subscriptionToolChoice(options.toolChoice, options.tools),
-        maxTokens: Math.min(options.maxTokens ?? entry.maxOutput, entry.maxOutput),
+        maxTokens: Math.min(options.maxTokens ?? defaultMaxTokensFor(entry, settings), entry.maxOutput),
         messages: repairToolPairing(options.messages ?? []),
         // A combo chain records one logical turn for the whole chain; letting
         // the member record its own would count that turn twice.
@@ -995,7 +1002,7 @@ function describe(entry, settings) {
     if (Array.isArray(entry.efforts) && entry.efforts.length > 0) {
       parts.push(`thinking levels: ${entry.efforts.join(' / ')}`)
     } else {
-      const rung = Math.round(budgetFor(DEFAULT_LEVEL, entry, undefined, settings?.defaultMaxTokens) / 1024)
+      const rung = Math.round(budgetFor(DEFAULT_LEVEL, entry, undefined, defaultMaxTokensFor(entry, settings)) / 1024)
       parts.push(entry.canDisableThinking === false
         ? `thinking always on · ${rung}K default ceiling, shared with the answer`
         : 'tunable thinking budget')

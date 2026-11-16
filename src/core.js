@@ -3,6 +3,7 @@ import { ROUTE_MAIN, ROUTE_REGION } from "./adapter.js";
 import { toOpenAiUsage } from "./forward.js";
 import { carryFailure } from "./failure.js";
 import { effortsFor, defaultEffortFor } from "./effort.js";
+import { defaultMaxTokensFor } from "./store.js";
 function routableModelIds(snapshot) {
   const membership = new Set(snapshot.membership[ROUTE_MAIN] ?? []);
   if (snapshot.settings.exposeRegionModels !== false) {
@@ -13,7 +14,7 @@ function routableModelIds(snapshot) {
 function publicModelRows(snapshot) {
   const membership = routableModelIds(snapshot);
   return snapshot.catalog.filter((entry) => membership.has(entry.id)).map((entry) => {
-    const efforts = effortsFor(entry, void 0, snapshot.settings.defaultMaxTokens);
+    const efforts = effortsFor(entry, void 0, defaultMaxTokensFor(entry, snapshot.settings));
     return {
       id: entry.id,
       object: "model",
@@ -192,7 +193,7 @@ import { FreeModelAdapter, ROUTE_MAIN as ROUTE_MAIN2, ROUTE_REGION as ROUTE_REGI
 import { buildCatalog, buildEacCatalog, buildKiloCatalog, isEacEntry, isKiloEntry, parseListing, reviveKiloCatalog } from "./catalog.js";
 import { buildAggregateCatalog, isAggregateEntry } from "./aggregate.js";
 import { buildComboCatalog, isComboEntry, normalizeCombos, pruneRotation } from "./combos.js";
-import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden } from "./store.js";
+import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, migrateStats, pruneDays, recordTurn, recordUsage, isModelHidden, withModelLimits } from "./store.js";
 import { STATE, detectEgress, probeCatalog } from "./probe.js";
 import { CODE, UpstreamError, getJson } from "./http.js";
 import { runModelTest, modelAvailability } from "./model-test.js";
@@ -277,8 +278,9 @@ function createModelRuntime({
       seen.add(entry.id);
       merged.push(entry);
     }
-    const combos = normalizeCombos(settings.get().combos);
-    comboCatalog = buildComboCatalog(combos, merged);
+    const current = settings.get();
+    const combos = normalizeCombos(current.combos);
+    comboCatalog = buildComboCatalog(combos, merged.map((entry) => withModelLimits(entry, current)));
     pruneRotation(combos);
     for (const entry of comboCatalog) {
       if (seen.has(entry.id)) continue;
@@ -293,16 +295,21 @@ function createModelRuntime({
     rebuildCatalog();
   };
   mergeCatalogs();
-  const state = () => ({
-    catalog,
-    membership: computeMembership(catalog, availability.get(), settings.get()),
-    settings: settings.get(),
-    attributionUserAgent,
-    routing: {
-      quota: subscriptionRuntime?.routingQuota?.() ?? {},
-      usage: Object.fromEntries(catalog.map((row) => [row.id, stats.get().models?.[row.id]?.calls ?? 0]))
-    }
-  });
+  const projectedCatalog = (current) => catalog.map((entry) => withModelLimits(entry, current));
+  const state = () => {
+    const current = settings.get();
+    const projected = projectedCatalog(current);
+    return {
+      catalog: projected,
+      membership: computeMembership(projected, availability.get(), current),
+      settings: current,
+      attributionUserAgent,
+      routing: {
+        quota: subscriptionRuntime?.routingQuota?.() ?? {},
+        usage: Object.fromEntries(projected.map((row) => [row.id, stats.get().models?.[row.id]?.calls ?? 0]))
+      }
+    };
+  };
   const emitTopology = () => {
     if (!disposed) onTopology();
   };
@@ -579,13 +586,17 @@ function createModelRuntime({
     // saved, a subscription imported/toggled/removed, a combo edited) rebuilds
     // the merged view without an upstream listing round.
     syncAggregateCatalog() {
-      if (disposed) return catalog;
+      if (disposed) return state().catalog;
       mergeCatalogs();
       emitTopology();
-      return catalog;
+      return state().catalog;
     },
+    // The public view: per-model caps applied. The raw rows stay in the
+    // closure, so a cap is never destructive — clearing it restores the catalog
+    // value, and a capped copy carries `catalogContextWindow` / `catalogMaxOutput`
+    // when the page needs the number it capped.
     get catalog() {
-      return catalog;
+      return state().catalog;
     },
     get egress() {
       return egress;

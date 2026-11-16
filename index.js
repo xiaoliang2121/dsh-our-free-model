@@ -30,7 +30,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { externalUrl, openExternal } from './src/open-external.js'
 import { ROUTE_LABELS, ROUTE_MAIN, ROUTE_REGION } from './src/adapter.js'
-import { DATA_DIR_NAME, resolveDshHome, publicModelVisibility, validateModelVisibility, isModelHidden } from './src/store.js'
+import { DATA_DIR_NAME, resolveDshHome, publicModelVisibility, validateModelVisibility, isModelHidden, publicModelLimits, validateModelLimits, modelLimitOf, withModelLimits, defaultMaxTokensFor } from './src/store.js'
 import { isEacEntry, isKiloEntry } from './src/catalog.js'
 import { STATE } from './src/probe.js'
 import { generateKey, rankLanAddresses, startForwardServer, startLanRelay } from './src/forward.js'
@@ -1102,6 +1102,9 @@ export function apply(ctx, config) {
   const api = createApiRoutes({
     settings, stats, availability, catalog: () => modelRuntime.catalog, state,
     refreshCatalog, refreshAvailability, syncForward, syncRelay, syncEgress,
+    // A per-model cap changes what a chain's links advertise, so the merged view
+    // (and the chains built from it) has to be rebuilt without a listing round.
+    syncCatalog: syncAggregateCatalog,
     onVisibilityChanged: emitTopology,
     pool: fetchPoolSnapshot,
     eacAuth,
@@ -1673,6 +1676,10 @@ function sanitizeSettings(patch, current) {
   positive('probeIntervalMinutes', 15)
   positive('feedPollMinutes', 30)
   positive('defaultMaxTokens', 32768)
+  // The page sends a validated map, but a hand-edited file can carry anything;
+  // normalize through the same reader the runtime uses so a bad value is "no
+  // cap" rather than a session-breaking number.
+  if (next.modelLimits !== undefined) next.modelLimits = publicModelLimits(next)
   // Empty is meaningful here: it means "follow the built-in CLIENT_UA".
   for (const key of ['clientChannel', 'clientVersion']) {
     if (next[key] === undefined) continue
@@ -2046,8 +2053,33 @@ export function createApiRoutes(deps) {
         const visibility = validateModelVisibility(patch)
         const identityError = validateClientIdentity(patch)
         if (identityError !== undefined) return send(400, { error: identityError })
+        const limits = validateModelLimits(patch)
         const current = deps.settings.get()
-        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch', 'clientChannel', 'clientVersion']), ...visibility }, current)
+        if (limits.modelLimits !== undefined) {
+          // A context window that does not clear the request's own output
+          // ceiling leaves the host's compaction no message budget at all, and
+          // it throws on every pre-step before a turn can even start. Refused
+          // here so the page says why instead of the session dying one step
+          // later; the host's headroom (64K by default) is a host setting this
+          // plugin cannot see, so the page warns about it separately.
+          const catalog = new Map(deps.state().catalog.map(entry => [entry.id, entry]))
+          const candidate = { ...current, modelLimits: limits.modelLimits }
+          for (const [id, limit] of Object.entries(limits.modelLimits)) {
+            const entry = catalog.get(id)
+            if (entry === undefined) continue
+            const base = {
+              ...entry,
+              contextWindow: entry.catalogContextWindow ?? entry.contextWindow,
+              maxOutput: entry.catalogMaxOutput ?? entry.maxOutput,
+            }
+            const effective = withModelLimits(base, candidate)
+            const reserved = defaultMaxTokensFor(effective, candidate)
+            if (Number.isFinite(effective.contextWindow) && effective.contextWindow <= reserved) {
+              return send(400, { error: `modelLimits["${id}"].contextWindow must exceed the model's output ceiling (${reserved} tokens)` })
+            }
+          }
+        }
+        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch', 'clientChannel', 'clientVersion']), ...visibility, ...limits }, current)
         if (next.autoReloadWatch === true && deps.update.status().hotReloadAvailable === false) next.autoReloadWatch = false
         if (patch.forward !== undefined) {
           const forward = { ...(current.forward ?? {}), ...pick(patch.forward, ['enabled', 'host', 'port']) }
@@ -2122,7 +2154,8 @@ export function createApiRoutes(deps) {
           deps.settings.value = current
           return send(500, { error: 'could not persist settings' })
         }
-        if (Object.keys(visibility).length > 0) deps.onVisibilityChanged?.()
+        if (limits.modelLimits !== undefined) deps.syncCatalog?.()
+        else if (Object.keys(visibility).length > 0) deps.onVisibilityChanged?.()
         await deps.syncForward()
         await deps.syncRelay()
         await deps.syncEgress()
@@ -2457,6 +2490,7 @@ function publicCombo(entry) {
 function publicSettings(settings, forwardInfo, egressInfo) {
   return {
     ...publicModelVisibility(settings),
+    modelLimits: publicModelLimits(settings),
     enabled: settings.enabled !== false,
     exposeRegionModels: settings.exposeRegionModels !== false,
     probeIntervalMinutes: settings.probeIntervalMinutes ?? 15,
@@ -2537,7 +2571,6 @@ function buildSummary(deps) {
   const forwardInfo = deps.forwardInfo()
   const update = deps.update.status()
   const feedView = deps.announcements.view()
-  const defaultMaxTokens = deps.settings.get().defaultMaxTokens
   // Lanes that carry no availability verdict of their own. The absorbed channels
   // and the aggregate lane are named by a listing round that already succeeded,
   // and a combo is a view over rows that were themselves named — none of them is
@@ -2546,6 +2579,9 @@ function buildSummary(deps) {
   return {
     catalog: state.catalog.map(entry => ({
       ...entry,
+      // The cap as stored, so the card knows whether "restore" has anything to
+      // restore; the row itself already carries the effective (clamped) numbers.
+      limits: modelLimitOf(state.settings, entry.id) ?? null,
       hiddenByUser: isModelHidden(entry, state.settings),
       hiddenByGroup: isModelHidden(entry, { ...state.settings, hiddenModelIds: [] }),
       ...modelAvailability(entry.id, snapshot, unprobed(entry)),
@@ -2554,7 +2590,7 @@ function buildSummary(deps) {
       // was cut off at 8K. A model with no effort menu has no ladder to show;
       // a menu model's rungs are flat (its level, not the ladder, is the wire
       // control), which is what the card's "default ceiling" tag then reads.
-      ...(entry.reasoning === true ? { budgets: budgetLadder(entry, undefined, defaultMaxTokens) } : {}),
+      ...(entry.reasoning === true ? { budgets: budgetLadder(entry, undefined, defaultMaxTokensFor(entry, state.settings)) } : {}),
       // `null` here is what the picker does not advertise; the roster still lists
       // those models, because "the probe refused it" is the user's only evidence.
       route: (state.membership[ROUTE_MAIN] ?? []).includes(entry.id) ? ROUTE_MAIN

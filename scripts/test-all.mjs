@@ -130,6 +130,10 @@ const suites = [
   ['eac-abort', 'eac-abort-test.mjs', []],
   ['eac-proxy', 'eac-proxy-test.mjs', []],
   ['client-ua', 'client-ua-test.mjs', []],
+  // Per-model context/output caps: the settings route, the runtime projection,
+  // the wire, and the card editor.
+  ['model-limits', 'model-limits-test.mjs', []],
+  ['model-limits-ui', 'model-limits-ui-test.mjs', []],
   ['eac-login', 'eac-login-test.mjs', []],
   ['kilo', 'kilo-test.mjs', []],
   ['offline', 'offline-test.mjs', []],
