@@ -1,24 +1,16 @@
 /**
  * Free-lane tool vocabulary for dsh-llm-our-free-model.
  *
- * The lane's gate wants `read` + `shell`; the model should see the official
- * OpenCode 2.2.x declarations for the tools this host can actually run. This
- * module shapes the outbound `tools` array and translates the inbound call
- * arguments back to DSH. It is deliberately outside `src/o2a/`: SYNC.md keeps
- * that directory a pure port of opencode2api with no plugin-specific tables.
+ * The lane's gate requires the official OpenCode tool declarations (13 tools)
+ * byte-for-byte identical to the official client, plus todowrite.
  *
- * Boundaries (conservative on purpose):
- *
- * - tools with a real DSH counterpart become the official name + description +
- *   schema; name-changing maps also enter ToolRenameMap so the response side
- *   restores the DSH spelling;
- * - `bash` maps to the official `shell` (this lane's gate wants shell);
- * - `subagent`, `read_image` and every other DSH-only tool keep their own
- *   schema under the existing opaque `clint_<digest>` wire name;
- * - `patch` / `execute` are never declared;
- * - gate-only declarations (when the host has no read/bash) are the only ones
- *   that keep the placeholder note, so the model does not call a tool the host
- *   cannot execute.
+ * Rules:
+ * 1. Official names only carry official definitions: colliding declarations that do
+ *    not match official definitions byte-for-byte retreat to mcp_<hash>.
+ * 2. Non-official / caller-defined tools wrap as mcp_<hash>.
+ * 3. Genuine MCP tool names (e.g. mcp__*, mcp_*) preserve their full shape without truncation.
+ * 4. Missing official 13 tools are injected verbatim.
+ * 5. Inbound arguments are translated back to DSH conventions.
  *
  * @module src/tool-semantics
  */
@@ -27,8 +19,11 @@ import {
   CLIENT_TOOL_PREFIX,
   ToolRenameMap,
   clientToolWireName,
-  officialTool,
+  isWireToolName,
   renamableToolName,
+  officialTool,
+  V2_OFFICIAL_TOOL_ORDER,
+  isExactOfficialDefinition,
 } from './o2a.js'
 
 /** DSH tool name -> official tool name. */
@@ -51,72 +46,8 @@ const DSH_BY_OFFICIAL = Object.freeze(Object.fromEntries(
   Object.entries(OFFICIAL_BY_DSH).map(([dsh, official]) => [official, dsh]),
 ))
 
-const TODOWRITE_DESCRIPTION = [
-  'Create and update a todo list for the current session. The user sees it as your working plan.',
-  '',
-  'Use it proactively when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. Skip it for a single simple task or a purely conversational request. When in doubt, use it.',
-  '',
-  '- Send the full list on every call; it replaces the previous one.',
-  '- Mark items `in_progress` when you start them and `completed` as soon as they\'re actually done.',
-  '- Only call it when the list changes.',
-].join('\n')
-
-const TODOWRITE_SCHEMA = {
-  type: 'object',
-  properties: {
-    todos: {
-      type: 'array',
-      description: 'The updated todo list',
-      items: {
-        type: 'object',
-        properties: {
-          content: { type: 'string', description: 'Brief description of the task' },
-          status: {
-            type: 'string',
-            enum: ['pending', 'in_progress', 'completed', 'cancelled'],
-            description: 'Current status of the task: pending, in_progress, completed, cancelled',
-          },
-        },
-        required: ['content', 'status'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['todos'],
-  additionalProperties: false,
-}
-
-/**
- * Render one official declaration in the requested wire shape.
- *
- * `todowrite` is not in the captured 13-tool asset (the capture predates it),
- * so its definition lives here; every other name comes from the ported asset.
- */
-function renderOfficial(shape, name) {
-  if (name === 'todowrite') {
-    const parameters = structuredClone(TODOWRITE_SCHEMA)
-    if (shape === 'chat') {
-      return { type: 'function', function: { name, description: TODOWRITE_DESCRIPTION, parameters, strict: false } }
-    }
-    if (shape === 'flat') {
-      return { type: 'function', name, description: TODOWRITE_DESCRIPTION, parameters }
-    }
-    return { name, description: TODOWRITE_DESCRIPTION, input_schema: parameters }
-  }
-  return officialTool(shape, name)
-}
-
-/** Does this declaration already carry the official definition for `name`? */
-function isOfficialDefinition(entry, name, shape) {
-  const rendered = renderOfficial(shape, name)
-  if (rendered === undefined || rendered === null) return false
-  const own = shape === 'chat' ? entry?.function : entry
-  const official = shape === 'chat' ? rendered.function : rendered
-  if (own === null || own === undefined || official === null || official === undefined) return false
-  const ownSchema = shape === 'claude' ? own.input_schema : own.parameters
-  const officialSchema = shape === 'claude' ? official.input_schema : official.parameters
-  return own.description === official.description
-    && JSON.stringify(ownSchema) === JSON.stringify(officialSchema)
+export function isMcpToolName(name) {
+  return typeof name === 'string' && name.startsWith(CLIENT_TOOL_PREFIX) && !isWireToolName(name)
 }
 
 /** Rename one declaration on its wire-specific wrapper. */
@@ -165,8 +96,6 @@ function optionList(value) {
 const INBOUND = {
   read(args) {
     const out = {}
-    // The model imitates the DSH spelling it saw in earlier calls (history is
-    // not rewritten), so accept both spellings instead of dropping the path.
     const path = stringOr(args.path, args.file_path)
     if (path !== undefined) out.file_path = path
     for (const key of ['offset', 'limit']) {
@@ -225,7 +154,6 @@ const INBOUND = {
   },
 
   websearch(args) {
-    // A host-shaped call already carries the string array; keep it as-is.
     if (Array.isArray(args.queries)) {
       return { queries: args.queries.filter((query) => typeof query === 'string') }
     }
@@ -244,8 +172,6 @@ const INBOUND = {
       questions: questions.map((raw, index) => {
         const source = raw !== null && typeof raw === 'object' ? raw : {}
         const options = optionList(source.options)
-        // A host-shaped question (it already has an id or the DSH spelling of
-        // multi-select) is kept as-is; translating it again would erase those.
         const dshShaped = typeof source.id === 'string' || source.multi_select === true
         const out = {
           id: dshShaped && typeof source.id === 'string' ? source.id : 'q' + String(index),
@@ -289,8 +215,6 @@ const INBOUND = {
       : shellDescriptionFor(args.command)
     if (typeof args.command === 'string') out.command = args.command
     if (typeof args.workdir === 'string') out.workdir = args.workdir
-    // Official 0 means "no timeout"; DSH requires a positive value. A
-    // host-shaped call already carries milliseconds and is taken verbatim.
     const timeout = Number(args.timeout)
     if (Number.isFinite(timeout) && timeout > 0) out.timeoutMs = Math.trunc(timeout)
     else {
@@ -325,45 +249,60 @@ export function shapeOfficialToolset(body, shape) {
       shaped.push(tool)
       continue
     }
+
     const officialName = OFFICIAL_BY_DSH[name]
     if (officialName !== undefined) {
-      // A different target already owned by another declaration: keep this
-      // tool executable under its opaque name instead of creating a duplicate.
-      if (officialName !== name && used.has(officialName)) {
-        const wire = renames.wireOf(name) ?? clientToolWireName(name, used)
+      // DSH 工具映射到官方名称（例如 bash -> shell, edit -> edit, web_search -> websearch 等）
+      if (used.has(officialName)) {
+        const wire = clientToolWireName(name, used)
         renames.add(name, wire)
         shaped.push(withName(shape, tool, wire))
         used.add(wire)
         continue
       }
-      const rendered = renderOfficial(shape, officialName)
-      if (rendered === undefined || rendered === null) {
-        const wire = renames.wireOf(name) ?? clientToolWireName(name, used)
-        renames.add(name, wire)
-        shaped.push(withName(shape, tool, wire))
-        used.add(wire)
+      const rendered = officialTool(shape, officialName)
+      if (rendered !== undefined && rendered !== null) {
+        shaped.push(rendered)
+        if (officialName !== name) renames.add(name, officialName)
+        semantics.set(name, INBOUND[officialName])
+        used.add(officialName)
         continue
       }
-      shaped.push(rendered)
-      if (officialName !== name) renames.add(name, officialName)
-      semantics.set(name, INBOUND[officialName])
-      used.add(officialName)
+    }
+
+    // 已经具有官方名称的工具（例如调用方直接传 edit/shell/read 等）：
+    // 若定义与官方逐字一致，则保留并建立映射；若不一致（同名异质），必须退避为 mcp_<hash>
+    if (V2_OFFICIAL_TOOL_ORDER.includes(name)) {
+      if (isExactOfficialDefinition(tool, name, shape) && !used.has(name)) {
+        shaped.push(tool)
+        if (INBOUND[name]) semantics.set(name, INBOUND[name])
+        used.add(name)
+        continue
+      }
+      // 撞名异质工具：退避为 mcp_<hash>
+      const wire = clientToolWireName(name, used)
+      renames.add(name, wire)
+      shaped.push(withName(shape, tool, wire))
+      used.add(wire)
       continue
     }
-    if (name.startsWith(CLIENT_TOOL_PREFIX)) {
+
+    // 真实的 MCP 工具名（例如 mcp__github__search）：保留完整形状，不被误判为 generated wire name
+    if (isMcpToolName(name)) {
       shaped.push(tool)
       used.add(name)
       continue
     }
-    const dsh = DSH_BY_OFFICIAL[name]
-    if (dsh !== undefined && isOfficialDefinition(tool, name, shape)) {
-      // Idempotence: a body that was already shaped must not be renamed again.
+
+    // 幂等性防护：若已经是上一轮生成的合法 wire name
+    if (isWireToolName(name)) {
       shaped.push(tool)
-      if (dsh === name) semantics.set(name, INBOUND[name])
       used.add(name)
       continue
     }
-    const wire = renames.wireOf(name) ?? clientToolWireName(name, used)
+
+    // 其他非官方工具（如 custom_tool, subagent_fork 等）：统一重命名为 mcp_<hash>
+    const wire = clientToolWireName(name, used)
     renames.add(name, wire)
     shaped.push(withName(shape, tool, wire))
     used.add(wire)
@@ -373,7 +312,7 @@ export function shapeOfficialToolset(body, shape) {
   // as a placeholder so the model does not call a tool the host cannot run.
   const injected = []
   if (!used.has('read')) {
-    const read = renderOfficial(shape, 'read')
+    const read = officialTool(shape, 'read')
     if (read !== undefined && read !== null) {
       shaped.push(read)
       injected.push('read')
@@ -381,7 +320,7 @@ export function shapeOfficialToolset(body, shape) {
     }
   }
   if (!used.has('shell')) {
-    const shell = renderOfficial(shape, 'shell')
+    const shell = officialTool(shape, 'shell')
     if (shell !== undefined && shell !== null) {
       shaped.push(shell)
       injected.push('shell')
@@ -422,32 +361,26 @@ export function translateToolArguments(raw, inbound) {
   }
 }
 
-function objectOf(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
-}
-
-/** Rewrite a tool_choice that names a renamed tool; history is intentionally left alone. */
+/** Rewrite tool_choice so it targets the wire name. */
 export function rewriteToolChoice(body, shape, renames) {
-  if (renames.size === 0) return
-  const choice = objectOf(body.tool_choice)
-  if (choice === null) return
-  const renamed = (container) => {
-    if (container === null || typeof container !== 'object') return null
-    const name = container.name
-    if (typeof name !== 'string') return null
-    const wire = renames.wireOf(name)
-    return wire !== undefined && wire !== name ? wire : null
-  }
+  if (!body || typeof body !== 'object' || !body.tool_choice || !(renames instanceof ToolRenameMap)) return
   if (shape === 'chat') {
-    if (choice.function && typeof choice.function === 'object') {
-      const wire = renamed(choice.function)
-      if (wire !== null) body.tool_choice = { ...choice, function: { ...choice.function, name: wire } }
-      return
+    const choice = body.tool_choice
+    if (choice !== null && typeof choice === 'object' && choice.function) {
+      const target = renames.wireOf(choice.function.name)
+      if (target !== undefined) choice.function.name = target
     }
-    const wire = renamed(choice)
-    if (wire !== null) body.tool_choice = { ...choice, name: wire }
-    return
+  } else if (shape === 'claude') {
+    const choice = body.tool_choice
+    if (choice !== null && typeof choice === 'object' && typeof choice.name === 'string') {
+      const target = renames.wireOf(choice.name)
+      if (target !== undefined) choice.name = target
+    }
+  } else if (shape === 'flat') {
+    const choice = body.tool_choice
+    if (choice !== null && typeof choice === 'object' && typeof choice.name === 'string') {
+      const target = renames.wireOf(choice.name)
+      if (target !== undefined) choice.name = target
+    }
   }
-  const wire = renamed(choice)
-  if (wire !== null) body.tool_choice = { ...choice, name: wire }
 }

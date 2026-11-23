@@ -64,113 +64,141 @@ function randomProjectID() {
 }
 
 // src/o2a/tool-renames.js
-import crypto2 from "node:crypto";
-var CLIENT_TOOL_PREFIX = "clint_";
+import { createHash } from "node:crypto";
+var CLIENT_TOOL_PREFIX = "mcp_";
+var LEGACY_CLIENT_TOOL_PREFIXES = Object.freeze(["clint_"]);
 var CLIENT_TOOL_DIGEST_LENGTH = 12;
 var TOOL_WIRE_NAME_LIMIT = 64;
-var TOOL_NAME_SEPARATORS = "_.- 	\r\n";
-var SEPARATOR_SET = new Set(TOOL_NAME_SEPARATORS);
-function foldToolName(name) {
-  let out = "";
-  for (const char of String(name ?? "").toLowerCase()) {
-    if (!SEPARATOR_SET.has(char)) out += char;
+var DIGEST_HEX = "0123456789abcdef";
+var COUNTER_SUFFIX = /^_\d+$/;
+function isWireToolName(name) {
+  if (typeof name !== "string" || name === "") return false;
+  for (const namespace of [CLIENT_TOOL_PREFIX, ...LEGACY_CLIENT_TOOL_PREFIXES]) {
+    if (!name.startsWith(namespace)) continue;
+    const body = name.slice(namespace.length);
+    const split = body.lastIndexOf("_");
+    const digest = split > 0 && COUNTER_SUFFIX.test(body.slice(split)) ? body.slice(0, split) : body;
+    if (digest.length !== CLIENT_TOOL_DIGEST_LENGTH) continue;
+    let allHex = true;
+    for (const char of digest) if (!DIGEST_HEX.includes(char)) {
+      allHex = false;
+      break;
+    }
+    if (allHex) return true;
   }
-  return out;
+  return false;
 }
-function clientToolWireName(name, used) {
-  const taken = used instanceof Set ? used : /* @__PURE__ */ new Set();
-  const digest = crypto2.createHash("sha256").update(String(name)).digest("hex");
-  let clean = digest.slice(0, CLIENT_TOOL_DIGEST_LENGTH);
-  const max = TOOL_WIRE_NAME_LIMIT - CLIENT_TOOL_PREFIX.length;
-  if (clean.length > max) clean = clean.slice(0, max);
-  const base = CLIENT_TOOL_PREFIX + clean;
-  if (!taken.has(base)) {
-    taken.add(base);
+function foldToolName(name) {
+  return String(name ?? "").toLowerCase().replace(/[_.\- \t\r\n]/g, "");
+}
+function clientToolWireName(name, taken) {
+  const issued = taken instanceof Set ? taken : /* @__PURE__ */ new Set();
+  const digest = createHash("sha256").update(String(name)).digest("hex").slice(0, CLIENT_TOOL_DIGEST_LENGTH);
+  const base = CLIENT_TOOL_PREFIX + digest;
+  if (!issued.has(base)) {
+    issued.add(base);
     return base;
   }
-  for (let suffix = 2; ; suffix += 1) {
-    const tag = `_${suffix}`;
-    const cut = Math.min(TOOL_WIRE_NAME_LIMIT - tag.length, base.length);
-    const candidate = base.slice(0, cut) + tag;
-    if (!taken.has(candidate)) {
-      taken.add(candidate);
-      return candidate;
-    }
+  for (let counter = 2; ; counter += 1) {
+    const suffix = `_${counter}`;
+    const candidate = base.slice(0, TOOL_WIRE_NAME_LIMIT - suffix.length) + suffix;
+    if (issued.has(candidate)) continue;
+    issued.add(candidate);
+    return candidate;
   }
 }
+var OFFICIAL_TOOL_ALIASES = Object.freeze({
+  edit: ["edit"],
+  glob: ["glob"],
+  grep: ["grep"],
+  question: ["question", "askuserquestion"],
+  read: ["read", "view"],
+  shell: ["shell", "bash"],
+  skill: ["skill"],
+  subagent: ["subagent", "agent", "task"],
+  webfetch: ["webfetch", "fetch"],
+  websearch: ["websearch"],
+  write: ["write"],
+  patch: ["patch", "applypatch"]
+});
+var OFFICIAL_BY_SPELLING = new Map(
+  Object.entries(OFFICIAL_TOOL_ALIASES).flatMap(([canonical, spellings]) => spellings.map((spelling) => [foldToolName(spelling), canonical]))
+);
+function officialForClientName(name) {
+  if (typeof name !== "string" || name === "") return null;
+  return OFFICIAL_BY_SPELLING.get(foldToolName(name)) ?? null;
+}
 var ToolRenameMap = class extends Map {
-  constructor() {
-    super();
-    this.#byClient = /* @__PURE__ */ new Map();
-    this.#byCase = /* @__PURE__ */ new Map();
-    this.#byShape = /* @__PURE__ */ new Map();
-  }
-  /** Records one client→wire mapping (`Add`). Conflicts keep the first allocation. */
+  #byClient = /* @__PURE__ */ new Map();
+  #byLower = /* @__PURE__ */ new Map();
+  #byFolded = /* @__PURE__ */ new Map();
+  /**
+   * Record that `client`'s tool goes out as `wire`.
+   *
+   * No-ops when the mapping is trivial or already known, so shaping twice is
+   * idempotent.
+   */
   add(client, wire) {
     if (!client || !wire || client === wire) return;
-    if (this.#byClient.has(client)) return;
-    if (this.has(wire)) return;
-    this.#byClient.set(client, wire);
+    if (this.#byClient.has(client) || this.has(wire)) return;
     this.set(wire, client);
-    bindFolded(this.#byCase, String(client).toLowerCase(), client);
-    bindFolded(this.#byShape, foldToolName(client), client);
+    this.#byClient.set(client, wire);
+    for (const [index, key] of [[this.#byLower, String(client).toLowerCase()], [this.#byFolded, foldToolName(client)]]) {
+      if (!key) continue;
+      const existing = index.get(key);
+      index.set(key, existing === void 0 || existing === client ? client : "");
+    }
   }
-  /** The wire name registered for an exact client name (`Wire`). */
+  /** The handle issued for a caller tool, if any. */
   wireOf(client) {
     return this.#byClient.get(client);
   }
-  /** Whether any wire name starts with `prefix` (`HasPrefix`). */
+  /** Does any issued handle start with `prefix`? */
   hasPrefix(prefix) {
     if (!prefix) return false;
-    for (const wire of this.keys()) {
-      if (wire.startsWith(prefix)) return true;
-    }
+    for (const wire of this.keys()) if (wire.startsWith(prefix)) return true;
     return false;
   }
-  /** Whether a wire name is longer than `prefix` and starts with it (`HasLongerPrefix`). */
+  /** Does any issued handle extend `prefix` beyond itself? */
   hasLongerPrefix(prefix) {
     if (!prefix) return false;
-    for (const wire of this.keys()) {
-      if (wire.length > prefix.length && wire.startsWith(prefix)) return true;
-    }
+    for (const wire of this.keys()) if (wire.length > prefix.length && wire.startsWith(prefix)) return true;
     return false;
   }
   /**
-   * Map a name the upstream reported back to the name the client declared
-   * (`Resolve`): an exact wire name restores; a `clint_` prefix is stripped as
-   * best-effort recovery; a name that differs from exactly one declared client
-   * tool in case, or in case and separators, folds onto that tool. A name two
-   * tools fold to is never guessed between.
+   * Map a name arriving from the model back to the caller's tool name.
+   *
+   * Three attempts, in decreasing confidence:
+   *
+   * 1. An exact handle in this request's map.
+   * 2. A handle minted by an earlier build: strip the namespace and look the
+   *    remainder up as a caller name. This is what keeps a conversation saved
+   *    under `clint_` working after an upgrade.
+   * 3. Case-insensitive, then separator-insensitive lookup of whatever remains —
+   *    including a name that was never renamed at all, which must survive intact
+   *    so a genuine MCP tool is not mangled.
+   *
+   * Returns the input unchanged when nothing matches. That is the honest
+   * outcome: the digest is one-way, so an unknown handle cannot be reversed, and
+   * inventing a name would be worse than passing it through.
    */
   resolve(wire) {
     if (!wire) return wire;
     const exact = this.get(wire);
     if (exact !== void 0) return exact;
-    let client = wire;
-    if (client.startsWith(CLIENT_TOOL_PREFIX)) {
-      const rest = client.slice(CLIENT_TOOL_PREFIX.length);
-      if (rest !== "") client = rest;
+    if (!isWireToolName(wire)) {
+      const drifted = this.#byLower.get(wire.toLowerCase());
+      if (drifted !== void 0) return drifted || wire;
+      return this.#byFolded.get(foldToolName(wire)) || wire;
     }
-    if (this.#byClient.has(client)) return client;
-    const caseMatch = this.#byCase.get(client.toLowerCase());
-    if (caseMatch !== void 0) return caseMatch !== "" ? caseMatch : client;
-    const shapeMatch = this.#byShape.get(foldToolName(client));
-    if (shapeMatch !== void 0 && shapeMatch !== "") return shapeMatch;
-    return client;
+    const namespace = [CLIENT_TOOL_PREFIX, ...LEGACY_CLIENT_TOOL_PREFIXES].find((candidate) => wire.startsWith(candidate) && wire.length > candidate.length);
+    const bare = namespace === void 0 ? wire : wire.slice(namespace.length);
+    if (this.#byClient.has(bare)) return bare;
+    const lower = this.#byLower.get(bare.toLowerCase());
+    if (lower !== void 0 && lower !== "") return lower;
+    return this.#byFolded.get(foldToolName(bare)) || wire;
   }
-  #byClient;
-  #byCase;
-  #byShape;
 };
-function bindFolded(folded, key, client) {
-  if (!key) return;
-  const existing = folded.get(key);
-  if (existing === void 0) {
-    folded.set(key, client);
-    return;
-  }
-  if (existing !== client) folded.set(key, "");
-}
 
 // src/o2a/asset-source.js
 var OFFICIAL_PROMPT_V2 = `You are opencode, an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
@@ -270,7 +298,7 @@ assistant: Clients are marked as failed in the \`connectToServer\` function in s
 </example>
 
 `;
-var OFFICIAL_TOOLS_V2 = '{\n  "edit": {\n    "description": "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in oldString or newString. Write line breaks as \\\\n; the file\'s existing CRLF or LF line endings are matched and preserved. To change line endings themselves, make oldString and newString differ only in \\\\r; that edit applies to the exact bytes. If there is no exact match, the edit retries while ignoring typographic quote, dash, and space variants, then trailing whitespace on each line. The edit fails if oldString is not found. By default, oldString must identify a UNIQUE location. Multiple matches FAIL unless replaceAll is true. Add more surrounding context to disambiguate, or set replaceAll to true to replace every occurrence. Use replaceAll when the change should apply to every occurrence, such as renaming a variable.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "newString": {\n          "description": "Text to replace oldString with (must differ from oldString)",\n          "type": "string"\n        },\n        "oldString": {\n          "description": "Exact text to find and replace",\n          "type": "string"\n        },\n        "path": {\n          "description": "File to edit",\n          "type": "string"\n        },\n        "replaceAll": {\n          "description": "Whether to replace every occurrence of oldString. When false, oldString must match exactly once. Defaults to false.",\n          "type": "boolean"\n        }\n      },\n      "required": ["path", "oldString", "newString"],\n      "type": "object"\n    }\n  },\n  "execute": {\n    "description": "Run JavaScript in a confined Code Mode runtime to script tool calls and HTTP requests and compose their results.\\n`fetch` is available for HTTP requests. Imports, direct filesystem access, and timers are unavailable; all other external access goes through `tools`.\\nWithin `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the Code Mode catalog. They are not available in the Code Mode runtime.\\nCall tools through `tools` using only exact paths and signatures from the catalog. Do not infer or normalize tool names; preserve bracket notation such as `tools.<namespace>[\\"tool-name\\"](input)`.\\nPrefer an explicit `return`; if omitted, the final top-level expression becomes the result.\\nAwait every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.allSettled`.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "code": {\n          "type": "string"\n        }\n      },\n      "required": ["code"],\n      "type": "object"\n    }\n  },\n  "glob": {\n    "description": "Search file paths using a glob pattern (examples: \\"**/*.ts\\", \\"src/**/*.tsx\\").",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "hidden": {\n          "description": "Include hidden files and directories (default: false).",\n          "type": "boolean"\n        },\n        "limit": {\n          "description": "Maximum number of matching files to return (default: 100)",\n          "exclusiveMinimum": 0,\n          "type": "integer"\n        },\n        "path": {\n          "description": "Directory to search. Defaults to the current working directory.",\n          "type": "string"\n        },\n        "pattern": {\n          "description": "Glob pattern to match files against",\n          "type": "string"\n        }\n      },\n      "required": ["pattern"],\n      "type": "object"\n    }\n  },\n  "grep": {\n    "description": "Search file contents using ripgrep\'s regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. Returns matching file paths, line numbers, and line previews.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "caseSensitive": {\n          "description": "Use case-sensitive matching (default: true).",\n          "type": "boolean"\n        },\n        "include": {\n          "description": "Glob pattern to filter files (for example, \\"*.js\\" or \\"*.{ts,tsx}\\")",\n          "type": "string"\n        },\n        "limit": {\n          "description": "Maximum number of matching lines to return (default: 100)",\n          "exclusiveMinimum": 0,\n          "type": "integer"\n        },\n        "literal": {\n          "description": "Treat `pattern` as exact text instead of a regular expression (default: false).",\n          "type": "boolean"\n        },\n        "path": {\n          "description": "File or directory to search. Defaults to the current working directory.",\n          "type": "string"\n        },\n        "pattern": {\n          "description": "Regular expression or literal text to match in file contents.",\n          "minLength": 1,\n          "type": "string"\n        }\n      },\n      "required": ["pattern"],\n      "type": "object"\n    }\n  },\n  "question": {\n    "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\\n1. Gather user preferences or requirements\\n2. Clarify ambiguous instructions\\n3. Get decisions on implementation choices as you work\\n4. Offer choices to the user about what direction to take.\\n\\nUsage notes:\\n- A \\"Type your own answer\\" option is added automatically; don\'t include a separate option for free form answers\\n- Set `multiple: true` to allow selecting more than one option\\n- If you recommend a specific option, make that the first option in the list and add \\"(Recommended)\\" at the end of the label",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "questions": {\n          "description": "Questions to ask",\n          "items": {\n            "additionalProperties": false,\n            "properties": {\n              "header": {\n                "description": "Very short label (max 30 chars)",\n                "type": "string"\n              },\n              "multiple": {\n                "type": "boolean"\n              },\n              "options": {\n                "description": "Available choices",\n                "items": {\n                  "additionalProperties": false,\n                  "properties": {\n                    "description": {\n                      "description": "Explanation of choice",\n                      "type": "string"\n                    },\n                    "label": {\n                      "description": "Display text (1-5 words, concise)",\n                      "type": "string"\n                    }\n                  },\n                  "required": ["label", "description"],\n                  "type": "object"\n                },\n                "type": "array"\n              },\n              "question": {\n                "description": "Complete question",\n                "type": "string"\n              }\n            },\n            "required": ["question", "header", "options"],\n            "type": "object"\n          },\n          "minItems": 1,\n          "type": "array"\n        }\n      },\n      "required": ["questions"],\n      "type": "object"\n    }\n  },\n  "read": {\n    "description": "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "limit": {\n          "description": "The maximum number of lines or directory entries to read (defaults to and capped at 2000)",\n          "minimum": 0,\n          "type": "integer"\n        },\n        "offset": {\n          "description": "The line or directory entry to start reading from (1-based)",\n          "minimum": 0,\n          "type": "integer"\n        },\n        "path": {\n          "description": "File or directory to read",\n          "type": "string"\n        }\n      },\n      "required": ["path"],\n      "type": "object"\n    }\n  },\n  "shell": {\n    "description": "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "background": {\n          "description": "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use \'&\' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion.",\n          "type": "boolean"\n        },\n        "command": {\n          "description": "Shell command string to execute",\n          "type": "string"\n        },\n        "timeout": {\n          "description": "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default.",\n          "minimum": 0,\n          "type": "integer"\n        },\n        "workdir": {\n          "description": "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",\n          "type": "string"\n        }\n      },\n      "required": ["command"],\n      "type": "object"\n    }\n  },\n  "skill": {\n    "description": "Load a specialized skill\'s instructions and resources into the current conversation when the task at hand matches its description.\\n\\nThe skill ID must match an available skill or a skill explicitly referenced by the user.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "id": {\n          "description": "The ID of an available skill or a skill explicitly referenced by the user",\n          "type": "string"\n        }\n      },\n      "required": ["id"],\n      "type": "object"\n    }\n  },\n  "subagent": {\n    "description": "Spawns an agent in a child session to work on the specified task.\\nThe output includes a sessionID you can pass back later to continue that specific conversation with the subagent.\\nNew child sessions start with fresh context, so include all relevant context and instructions when you don\'t pass a sessionID.\\nForeground (default) runs the subagent to completion and returns its final response.\\nBackground mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.\\nUse background only for independent work that can run while you continue elsewhere.\\n\\nAvailable subagents:\\n- explore: Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \\"src/components/**/*.tsx\\"), search code for keywords (eg. \\"API endpoints\\"), or answer questions about the codebase (eg. \\"how do API endpoints work?\\"). When calling this agent, specify the desired thoroughness level: \\"quick\\" for basic searches, \\"medium\\" for moderate exploration, or \\"very thorough\\" for comprehensive analysis across multiple locations and naming conventions.\\n- general: General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "agent": {\n          "description": "The type of specialized agent to use for this task. If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",\n          "type": "string"\n        },\n        "background": {\n          "description": "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",\n          "type": "boolean"\n        },\n        "description": {\n          "description": "A short 3-5 word label for the task, displayed to the user",\n          "type": "string"\n        },\n        "model": {\n          "description": "NEVER set this unless the user explicitly asks for a particular model or variant. The value is written as \\"providerID/modelID\\", or \\"providerID/modelID#variant\\" to include a variant. Do not guess the ID: look the model up with the models tool, filtering to your own provider first.",\n          "type": "string"\n        },\n        "prompt": {\n          "description": "The task for the subagent to perform",\n          "type": "string"\n        },\n        "sessionID": {\n          "description": "Continue a specific previous subagent conversation by passing its sessionID. Calls without a sessionID start a new conversation.",\n          "pattern": "^ses",\n          "type": "string"\n        }\n      },\n      "required": ["agent", "description", "prompt"],\n      "type": "object"\n    }\n  },\n  "webfetch": {\n    "description": "Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.\\n\\nUse a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "format": {\n          "description": "The format to return the content in. Defaults to markdown.",\n          "enum": ["text", "markdown", "html"],\n          "type": "string"\n        },\n        "timeout": {\n          "description": "Optional timeout in seconds (maximum: 120)",\n          "exclusiveMinimum": 0,\n          "maximum": 120,\n          "type": "number"\n        },\n        "url": {\n          "description": "The HTTP or HTTPS URL to fetch content from",\n          "type": "string"\n        }\n      },\n      "required": ["url"],\n      "type": "object"\n    }\n  },\n  "websearch": {\n    "description": "Search the web using the user\'s selected search integration. Use this for current information beyond knowledge cutoff.\\n\\nThe current year is 2026. Use this year when searching for recent information or current events.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "query": {\n          "description": "Websearch query",\n          "type": "string"\n        }\n      },\n      "required": ["query"],\n      "type": "object"\n    }\n  },\n  "write": {\n    "description": "Writes a file to the local filesystem, overwriting if one exists.\\n\\nMissing parent directories are created automatically.\\n\\nUse this tool to create new files or overwrite existing files. For partial changes, use the edit tool instead.",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "content": {\n          "description": "Content to write to the file",\n          "type": "string"\n        },\n        "path": {\n          "description": "Path to the file to write to",\n          "type": "string"\n        }\n      },\n      "required": ["path", "content"],\n      "type": "object"\n    }\n  },\n  "patch": {\n    "description": "Use the `patch` tool to edit files. Your patch language is a stripped\u2011down, file\u2011oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high\u2011level envelope:\\n\\n*** Begin Patch\\n[ one or more file sections ]\\n*** End Patch\\n\\nWithin that envelope, you get a sequence of file operations.\\nYou MUST include a header to specify the action you are taking.\\nEach operation starts with one of three headers:\\n\\n*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).\\n*** Delete File: <path> - remove an existing file. Nothing follows.\\n*** Update File: <path> - patch an existing file in place (optionally with a rename).\\n\\nExample patch:\\n\\n```\\n*** Begin Patch\\n*** Add File: hello.txt\\n+Hello world\\n*** Update File: src/app.py\\n*** Move to: src/main.py\\n@@ def greet():\\n-print(\\"Hi\\")\\n+print(\\"Hello, world!\\")\\n*** Delete File: obsolete.txt\\n*** End Patch\\n```\\n\\nIt is important to remember:\\n\\n- You must include a header with your intended action (Add/Delete/Update)\\n- You must prefix new lines with `+` even when creating a new file",\n    "parameters": {\n      "additionalProperties": false,\n      "properties": {\n        "patchText": {\n          "description": "The full patch text describing add, update, and delete operations",\n          "type": "string"\n        }\n      },\n      "required": ["patchText"],\n      "type": "object"\n    }\n  }\n}\n';
+var OFFICIAL_TOOLS_V2 = '{\n  "read": {\n    "description": "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "path": {\n          "type": "string",\n          "description": "File or directory to read"\n        },\n        "offset": {\n          "type": "integer",\n          "minimum": 0,\n          "description": "The line or directory entry to start reading from (1-based)"\n        },\n        "limit": {\n          "type": "integer",\n          "minimum": 0,\n          "description": "The maximum number of lines or directory entries to read (defaults to and capped at 2000)"\n        }\n      },\n      "required": [\n        "path"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "shell": {\n    "description": "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "command": {\n          "type": "string",\n          "description": "Shell command string to execute"\n        },\n        "workdir": {\n          "type": "string",\n          "description": "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead."\n        },\n        "timeout": {\n          "type": "integer",\n          "minimum": 0,\n          "description": "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default."\n        },\n        "background": {\n          "type": "boolean",\n          "description": "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use \'&\' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion."\n        }\n      },\n      "required": [\n        "command"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "edit": {\n    "description": "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in oldString or newString. Write line breaks as \\\\n; the file\'s existing CRLF or LF line endings are matched and preserved. To change line endings themselves, make oldString and newString differ only in \\\\r; that edit applies to the exact bytes. If there is no exact match, the edit retries while ignoring typographic quote, dash, and space variants, then trailing whitespace on each line. The edit fails if oldString is not found. By default, oldString must identify a UNIQUE location. Multiple matches FAIL unless replaceAll is true. Add more surrounding context to disambiguate, or set replaceAll to true to replace every occurrence. Use replaceAll when the change should apply to every occurrence, such as renaming a variable.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "path": {\n          "type": "string",\n          "description": "File to edit"\n        },\n        "oldString": {\n          "type": "string",\n          "description": "Exact text to find and replace"\n        },\n        "newString": {\n          "type": "string",\n          "description": "Text to replace oldString with (must differ from oldString)"\n        },\n        "replaceAll": {\n          "type": "boolean",\n          "description": "Whether to replace every occurrence of oldString. When false, oldString must match exactly once. Defaults to false."\n        }\n      },\n      "required": [\n        "path",\n        "oldString",\n        "newString"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "glob": {\n    "description": "Search file paths using a glob pattern (examples: \\"**/*.ts\\", \\"src/**/*.tsx\\").",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "pattern": {\n          "type": "string",\n          "description": "Glob pattern to match files against"\n        },\n        "path": {\n          "type": "string",\n          "description": "Directory to search. Defaults to the current working directory."\n        },\n        "hidden": {\n          "type": "boolean",\n          "description": "Include hidden files and directories (default: false)."\n        },\n        "limit": {\n          "type": "integer",\n          "exclusiveMinimum": 0,\n          "description": "Maximum number of matching files to return (default: 100)"\n        }\n      },\n      "required": [\n        "pattern"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "grep": {\n    "description": "Search file contents using ripgrep\'s regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. Returns matching file paths, line numbers, and line previews.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "pattern": {\n          "type": "string",\n          "minLength": 1,\n          "description": "Regular expression or literal text to match in file contents."\n        },\n        "path": {\n          "type": "string",\n          "description": "File or directory to search. Defaults to the current working directory."\n        },\n        "include": {\n          "type": "string",\n          "description": "Glob pattern to filter files (for example, \\"*.js\\" or \\"*.{ts,tsx}\\")"\n        },\n        "literal": {\n          "type": "boolean",\n          "description": "Treat `pattern` as exact text instead of a regular expression (default: false)."\n        },\n        "caseSensitive": {\n          "type": "boolean",\n          "description": "Use case-sensitive matching (default: true)."\n        },\n        "limit": {\n          "type": "integer",\n          "exclusiveMinimum": 0,\n          "description": "Maximum number of matching lines to return (default: 100)"\n        }\n      },\n      "required": [\n        "pattern"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "write": {\n    "description": "Writes a file to the local filesystem, overwriting if one exists.\\n\\nMissing parent directories are created automatically.\\n\\nUse this tool to create new files or overwrite existing files. For partial changes, use the edit tool instead.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "path": {\n          "type": "string",\n          "description": "Path to the file to write to"\n        },\n        "content": {\n          "type": "string",\n          "description": "Content to write to the file"\n        }\n      },\n      "required": [\n        "path",\n        "content"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "patch": {\n    "description": "Use the `patch` tool to edit files. Your patch language is a stripped\u2011down, file\u2011oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high\u2011level envelope:\\n\\n*** Begin Patch\\n[ one or more file sections ]\\n*** End Patch\\n\\nWithin that envelope, you get a sequence of file operations.\\nYou MUST include a header to specify the action you are taking.\\nEach operation starts with one of three headers:\\n\\n*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).\\n*** Delete File: <path> - remove an existing file. Nothing follows.\\n*** Update File: <path> - patch an existing file in place (optionally with a rename).\\n\\nExample patch:\\n\\n```\\n*** Begin Patch\\n*** Add File: hello.txt\\n+Hello world\\n*** Update File: src/app.py\\n*** Move to: src/main.py\\n@@ def greet():\\n-print(\\"Hi\\")\\n+print(\\"Hello, world!\\")\\n*** Delete File: obsolete.txt\\n*** End Patch\\n```\\n\\nIt is important to remember:\\n\\n- You must include a header with your intended action (Add/Delete/Update)\\n- You must prefix new lines with `+` even when creating a new file\\n",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "patchText": {\n          "type": "string",\n          "description": "The full patch text describing add, update, and delete operations"\n        }\n      },\n      "required": [\n        "patchText"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "webfetch": {\n    "description": "Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.\\n\\nUse a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "url": {\n          "type": "string",\n          "description": "The HTTP or HTTPS URL to fetch content from"\n        },\n        "format": {\n          "enum": [\n            "text",\n            "markdown",\n            "html"\n          ],\n          "description": "The format to return the content in. Defaults to markdown."\n        },\n        "timeout": {\n          "type": "number",\n          "exclusiveMinimum": 0,\n          "maximum": 120,\n          "description": "Optional timeout in seconds (maximum: 120)"\n        }\n      },\n      "required": [\n        "url",\n        "format"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "websearch": {\n    "description": "Search the web using the user\'s selected search integration. Use this for current information beyond knowledge cutoff.\\n\\nThe current year is 2026. Use this year when searching for recent information or current events.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "query": {\n          "type": "string",\n          "description": "Websearch query"\n        }\n      },\n      "required": [\n        "query"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "question": {\n    "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\\n1. Gather user preferences or requirements\\n2. Clarify ambiguous instructions\\n3. Get decisions on implementation choices as you work\\n4. Offer choices to the user about what direction to take.\\n\\nUsage notes:\\n- A \\"Type your own answer\\" option is added automatically; don\'t include a separate option for free form answers\\n- Set `multiple: true` to allow selecting more than one option\\n- If you recommend a specific option, make that the first option in the list and add \\"(Recommended)\\" at the end of the label",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "questions": {\n          "type": "array",\n          "items": {\n            "type": "object",\n            "properties": {\n              "question": {\n                "type": "string"\n              },\n              "header": {\n                "type": "string"\n              },\n              "options": {\n                "type": "array",\n                "items": {\n                  "type": "object",\n                  "properties": {\n                    "label": {\n                      "type": "string"\n                    },\n                    "description": {\n                      "type": "string"\n                    }\n                  },\n                  "required": [\n                    "label",\n                    "description"\n                  ],\n                  "additionalProperties": false\n                }\n              },\n              "multiple": {\n                "type": "boolean"\n              }\n            },\n            "required": [\n              "question",\n              "header",\n              "options"\n            ],\n            "additionalProperties": false\n          },\n          "minItems": 1,\n          "description": "Questions to ask"\n        }\n      },\n      "required": [\n        "questions"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "skill": {\n    "description": "Load a specialized skill\'s instructions and resources into the current conversation when the task at hand matches its description.\\n\\nThe skill ID must match an available skill or a skill explicitly referenced by the user.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "id": {\n          "type": "string",\n          "description": "The ID of an available skill or a skill explicitly referenced by the user"\n        }\n      },\n      "required": [\n        "id"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "subagent": {\n    "description": "Spawns an agent in a child session to work on the specified task.\\nThe output includes a sessionID you can pass back later to continue that specific conversation with the subagent.\\nNew child sessions start with fresh context, so include all relevant context and instructions when you don\'t pass a sessionID.\\nForeground (default) runs the subagent to completion and returns its final response.\\nBackground mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.\\nUse background only for independent work that can run while you continue elsewhere.",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "agent": {\n          "type": "string",\n          "description": "The type of specialized agent to use for this task. If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead."\n        },\n        "description": {\n          "type": "string",\n          "description": "A short 3-5 word label for the task, displayed to the user"\n        },\n        "prompt": {\n          "type": "string",\n          "description": "The task for the subagent to perform"\n        },\n        "model": {\n          "type": "string",\n          "description": "NEVER set this unless the user explicitly asks for a particular model or variant. It must be a chat model; image and decision models can\'t run subagents. The value is written as \\"providerID/modelID\\", or \\"providerID/modelID#variant\\" to include a variant. Do not guess the ID: look the model up with the models tool, filtering to your own provider first."\n        },\n        "sessionID": {\n          "type": "string",\n          "description": "Send a follow-up to an existing subagent, running or finished. Omit to start a new one."\n        },\n        "background": {\n          "type": "boolean",\n          "description": "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress."\n        }\n      },\n      "required": [\n        "agent",\n        "description",\n        "prompt"\n      ],\n      "additionalProperties": false\n    }\n  },\n  "todowrite": {\n    "description": "Create and update a todo list for the current session. The user sees it as your working plan.\\n\\nUse it proactively when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. Skip it for a single simple task or a purely conversational request. When in doubt, use it.\\n\\n- Send the full list on every call; it replaces the previous one.\\n- Mark items `in_progress` when you start them and `completed` as soon as they\'re actually done.\\n- Only call it when the list changes.\\n",\n    "parameters": {\n      "type": "object",\n      "properties": {\n        "todos": {\n          "type": "array",\n          "items": {\n            "type": "object",\n            "properties": {\n              "content": {\n                "type": "string",\n                "description": "Brief description of the task"\n              },\n              "status": {\n                "enum": [\n                  "pending",\n                  "in_progress",\n                  "completed",\n                  "cancelled"\n                ],\n                "description": "Current status of the task: pending, in_progress, completed, cancelled"\n              }\n            },\n            "required": [\n              "content",\n              "status"\n            ],\n            "additionalProperties": false\n          },\n          "description": "The updated todo list"\n        }\n      },\n      "required": [\n        "todos"\n      ],\n      "additionalProperties": false\n    }\n  }\n}\n';
 function officialPromptText() {
   return OFFICIAL_PROMPT_V2;
 }
@@ -281,78 +309,59 @@ function officialToolsText() {
 // src/o2a/official-tools.js
 var V2_OFFICIAL_TOOL_ORDER = Object.freeze([
   "edit",
-  "execute",
   "glob",
   "grep",
+  "patch",
   "question",
   "read",
   "shell",
   "skill",
   "subagent",
+  "todowrite",
   "webfetch",
   "websearch",
-  "write",
-  "patch"
+  "write"
 ]);
-var officialTools;
-function loadOfficialTools() {
-  if (officialTools !== void 0) return officialTools;
-  officialTools = /* @__PURE__ */ new Map();
-  try {
-    const parsed = JSON.parse(officialToolsText());
-    for (const [name, definition] of Object.entries(parsed)) {
-      if (definition && typeof definition.description === "string" && definition.parameters) {
-        officialTools.set(name, definition);
-      }
-    }
-  } catch {
-  }
-  return officialTools;
-}
+var definitions;
 function officialToolDefinition(name) {
-  return loadOfficialTools().get(name);
+  definitions ??= new Map(Object.entries(JSON.parse(officialToolsText())));
+  return definitions.get(name);
 }
 function v2ShellDescription(base, platform = process.platform) {
   if (platform !== "win32") return base;
   return base.replace("on Linux using bash", "on Windows using powershell");
 }
 function officialTool(shape, name) {
-  let description = `Agent tool ${name}`;
-  let parameters = { type: "object", properties: {} };
   const definition = officialToolDefinition(name);
-  if (definition !== void 0) {
-    description = definition.description;
-    if (definition.parameters != null) parameters = structuredClone(definition.parameters);
-  }
+  let description = definition?.description ?? `Agent tool ${name}`;
+  const parameters = definition?.parameters == null ? { type: "object", properties: {} } : structuredClone(definition.parameters);
   if (name === "shell") description = v2ShellDescription(description);
-  if (shape === "claude") {
-    return { name, description, input_schema: parameters };
-  }
-  if (shape === "flat") {
-    return { type: "function", name, description, parameters };
-  }
-  return {
-    type: "function",
-    function: { name, description, parameters, strict: false }
-  };
+  if (shape === "claude") return { name, description, input_schema: parameters };
+  const fn = { name, description, parameters };
+  return shape === "flat" ? { type: "function", ...fn } : { type: "function", function: { ...fn, strict: false } };
 }
 function officialToolset(shape) {
   return V2_OFFICIAL_TOOL_ORDER.map((name) => officialTool(shape, name));
 }
 function renamableToolName(shape, entry) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-  if (shape === "chat") {
-    const name2 = entry.function?.name;
-    return typeof name2 === "string" && name2 !== "" ? name2 : null;
+  if (shape !== "chat") {
+    const type = typeof entry.type === "string" ? entry.type : "";
+    if (shape === "flat" && !["", "function", "custom"].includes(type)) return null;
+    if (shape === "claude" && !["", "custom"].includes(type)) return null;
   }
-  const type = typeof entry.type === "string" ? entry.type : "";
-  if (shape === "flat") {
-    if (type !== "" && type !== "function" && type !== "custom") return null;
-  } else if (shape === "claude") {
-    if (type !== "" && type !== "custom") return null;
-  }
-  const name = entry.name;
-  return typeof name === "string" && name !== "" ? name : null;
+  const name = shape === "chat" ? entry.function?.name : entry.name;
+  return typeof name === "string" && name.length > 0 ? name : null;
+}
+function isExactOfficialDefinition(entry, name, shape = "chat") {
+  const wrapper = shape === "chat" ? entry?.function ?? entry : entry;
+  if (!wrapper || typeof wrapper !== "object") return false;
+  const rendered = officialTool(shape, name);
+  const target = shape === "chat" ? rendered?.function ?? rendered : rendered;
+  if (!target) return false;
+  const schema = shape === "claude" ? wrapper.input_schema : wrapper.parameters;
+  const targetSchema = shape === "claude" ? target.input_schema : target.parameters;
+  return wrapper.description === target.description && JSON.stringify(schema) === JSON.stringify(targetSchema);
 }
 
 // src/o2a/official-prompt.js
@@ -511,11 +520,11 @@ function ensureV2CompletionLimit(payload, shape) {
 }
 
 // src/o2a/headers.js
-import crypto3 from "node:crypto";
+import crypto2 from "node:crypto";
 var GIT_COMMIT_RE = /^[0-9a-f]{40}$/;
 function projectID(project) {
   if (project === "global" || GIT_COMMIT_RE.test(String(project))) return project;
-  const sum = crypto3.createHash("sha256").update(`opencode-project\0${project}`).digest();
+  const sum = crypto2.createHash("sha256").update(`opencode-project\0${project}`).digest();
   return sum.subarray(0, 20).toString("hex");
 }
 function gatewayHeaders({ session, childSession, project, stream, accept, anthropic, userAgent, credential } = {}) {
@@ -715,11 +724,13 @@ export {
   CLIENT_TOOL_PREFIX,
   CLIENT_UA,
   DESCENDING_TIME_RE,
+  LEGACY_CLIENT_TOOL_PREFIXES,
   O2A_COMMIT,
   O2A_REFERENCE,
   O2A_VERSION,
   OFFICIAL_PROMPT_MARKER,
   OFFICIAL_SKILLS,
+  OFFICIAL_TOOL_ALIASES,
   SESSION_PHASE_MS,
   SESSION_TIMESTAMP_WINDOW_MS,
   TOOL_WIRE_NAME_LIMIT,
@@ -738,8 +749,11 @@ export {
   foldToolName,
   gatewayHeaders,
   injectOfficialPrompt,
+  isExactOfficialDefinition,
   isOfficialSessionID,
+  isWireToolName,
   officialEnvironment,
+  officialForClientName,
   officialPrompt,
   officialSystemPrompt,
   officialTool,

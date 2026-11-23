@@ -166,10 +166,13 @@ export function classifyFailure(status, payload, retryAfterMs) {
   return new UpstreamError(message, CODE.server, { status, type })
 }
 
-/** Parse `Retry-After` into milliseconds, when the header carries a number. */
-function retryAfter(header) {
+export const MAX_RETRY_AFTER_MS = 30 * 60 * 1000
+
+/** Parse `Retry-After` into milliseconds, clamped to MAX_RETRY_AFTER_MS (30 mins). */
+export function retryAfter(header) {
   const seconds = Number(header)
-  return Number.isFinite(seconds) && seconds > 0 ? Math.trunc(seconds * 1000) : undefined
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined
+  return Math.min(Math.trunc(seconds * 1000), MAX_RETRY_AFTER_MS)
 }
 
 /**

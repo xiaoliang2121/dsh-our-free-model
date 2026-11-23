@@ -86,16 +86,19 @@ try {
     return chunks
   }
 
-  // 1. Outbound: the host declarations become the official vocabulary, and the
-  //    gate pair is still present even though the host sent neither read nor bash.
+  // 1. Outbound: the host declarations become the official vocabulary, and all
+  //    13 official tools are present to satisfy upstream whitelist fingerprints.
   nextCalls = []
-  await run(toolsOf(['bash', 'edit', 'web_search', 'ask_user_question', 'todo_write', 'custom_tool']))
+  await run(toolsOf(['bash', 'edit', 'web_search', 'ask_user_question', 'todo_write', 'custom_tool', 'mcp__github__search']))
   const outbound = lastPayload.tools.map(tool => tool.function.name)
-  check('outbound names', outbound, ['shell', 'edit', 'websearch', 'question', 'todowrite', clientToolWireName('custom_tool'), 'read'])
+  const expectedOutbound = ['shell', 'edit', 'websearch', 'question', 'todowrite', clientToolWireName('custom_tool'), 'mcp__github__search', 'read']
+  check('outbound names', outbound, expectedOutbound)
+  check('custom_tool is renamed to mcp_ wire name', outbound.includes(clientToolWireName('custom_tool')), true)
+  check('real MCP tool name preserves its full shape', outbound.includes('mcp__github__search'), true)
   check('the DSH bash name is gone', outbound.includes('bash'), false)
   check('edit carries the official schema', lastPayload.tools.find(tool => tool.function.name === 'edit').function.parameters.required, ['path', 'oldString', 'newString'])
   check('the gate read is official', lastPayload.tools.find(tool => tool.function.name === 'read').function.parameters.required, ['path'])
-  check('the DSH-only tool keeps its own description', lastPayload.tools.find(tool => tool.function.name.startsWith('clint_')).function.description, 'host custom_tool')
+  check('the DSH-only tool keeps its own description', lastPayload.tools.find(tool => tool.function.name === clientToolWireName('custom_tool')).function.description, 'host custom_tool')
 
   // 2. Inbound: shell and edit are restored with the DSH argument keys.
   nextCalls = [
@@ -155,6 +158,17 @@ try {
     check('host-spelled write keeps its path', JSON.parse(byName.write.arguments), {
       file_path: '/a/b.js', content: 'hi',
     })
+  }
+
+  // 5. Inbound: genuine MCP tool names are preserved completely without truncation.
+  nextCalls = [
+    { id: 'c1', name: 'mcp__github__search', args: { query: 'test' } },
+  ]
+  {
+    const chunks = await run(toolsOf(['mcp__github__search']))
+    const calls = chunks.filter(chunk => chunk.block?.type === 'tool-call').map(chunk => chunk.block)
+    check('real MCP tool call restores intact', calls[0]?.name, 'mcp__github__search')
+    check('real MCP tool is not truncated to _github__search', calls[0]?.name !== '_github__search', true)
   }
 } finally {
   globalThis.fetch = oldFetch
